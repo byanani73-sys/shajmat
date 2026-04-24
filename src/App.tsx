@@ -1232,6 +1232,8 @@ export default function App() {
         minutes,
         themes:       Object.values(groups).flat().filter(t => !t.includes('_')),
         opening_tags: groups.openingTags ?? [],
+        min_rating:   minRating,
+        max_rating:   maxRating,
         score_ok:     scoreOk,
         score_err:    scoreErr,
         puzzles_seen: seenIds.current,
@@ -1247,7 +1249,7 @@ export default function App() {
       // Refrescar mejores scores
       getBestScores(authUser.id).then(setBestScores).catch(() => {})
     }
-  }, [authUser, isGuest, minutes, selectedThemes, selectedOpenings, scoreOk, scoreErr, history])
+  }, [authUser, isGuest, minutes, selectedThemes, selectedOpenings, minRating, maxRating, scoreOk, scoreErr, history])
 
   const goConfig = useCallback(() => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)

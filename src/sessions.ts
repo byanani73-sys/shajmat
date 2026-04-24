@@ -8,6 +8,8 @@ export interface SessionRecord {
   minutes:      number
   themes:       string[]
   opening_tags: string[]
+  min_rating?:  number
+  max_rating?:  number
   score_ok:     number
   score_err:    number
   puzzles_seen: string[]
