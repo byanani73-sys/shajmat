@@ -640,8 +640,8 @@ function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setS
 }
 
 // ══ Storm ═════════════════════════════════════════════════════════════════════
-function StormScreen({ puzzle, currentFen, currentTurn, dests, wrongHint, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, feedback, loading, error, onRetry, onMove, onEnd }: {
-  puzzle:Puzzle|null; currentFen:string; currentTurn:'white'|'black'; dests:Map<Key, Key[]>; wrongHint:string|null
+function StormScreen({ puzzle, currentFen, currentTurn, dests, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, feedback, loading, error, onRetry, onMove, onEnd }: {
+  puzzle:Puzzle|null; currentFen:string; currentTurn:'white'|'black'; dests:Map<Key, Key[]>
   puzzleNum:number; minutes:number; timeLeft:number; timerStarted:boolean
   scoreOk:number; scoreErr:number; feedback:Feedback; loading:boolean
   error:string|null; onRetry:()=>void
@@ -655,7 +655,7 @@ function StormScreen({ puzzle, currentFen, currentTurn, dests, wrongHint, puzzle
   const fbBg   = feedback==='correct' ? C.correctBg : feedback==='wrong' ? C.redBg : 'transparent'
   const fbColor= feedback==='correct' ? C.correct   : feedback==='wrong' ? C.red   : C.muted
   const fbText = feedback==='correct' ? '¡Correcto!'
-               : feedback==='wrong'   ? (wrongHint ? `Incorrecto · era ${wrongHint}` : 'Incorrecto')
+               : feedback==='wrong'   ? 'Incorrecto'
                : feedback==='thinking'? 'El rival responde...'
                : loading              ? 'Cargando puzzle...'
                : `${currentTurn==='white'?'Blancas':'Negras'} juegan`
@@ -1050,7 +1050,6 @@ export default function App() {
   const [currentTurn, setCurrentTurn] = useState<'white'|'black'>('white')
   const [dests,       setDests]       = useState<Map<Key, Key[]>>(new Map())
   const [moveIdx,     setMoveIdx]     = useState(0)
-  const [wrongHint,   setWrongHint]   = useState<string|null>(null)
   const [loading,     setLoading]     = useState(false)
   const [scoreOk,     setScoreOk]     = useState(0)
   const [scoreErr,    setScoreErr]    = useState(0)
@@ -1076,7 +1075,6 @@ export default function App() {
     setCurrentTurn(puzzle.turn)
     setDests(computeDests(c))
     setMoveIdx(0)
-    setWrongHint(null)
   }, [puzzle?.id])
 
   // Init — escuchar cambios de auth de Supabase
@@ -1150,19 +1148,9 @@ export default function App() {
     const isCorrect = validateMove(currentFen, userMove, expected)
 
     if (!isCorrect) {
-      try {
-        const probe = new Chess(currentFen)
-        const m = probe.move({
-          from: expected.slice(0, 2),
-          to:   expected.slice(2, 4),
-          promotion: expected.length > 4 ? (expected[4] as 'q'|'r'|'b'|'n') : undefined,
-        })
-        setWrongHint(m?.san ?? expected)
-      } catch { setWrongHint(expected) }
-
       setFeedback('wrong'); setScoreErr(s=>s+1)
       setHistory(h=>[...h, {...puzzle, result:'err'}])
-      nextRef.current = setTimeout(advanceToNext, 2400)
+      nextRef.current = setTimeout(advanceToNext, 400)
       return
     }
 
@@ -1177,7 +1165,7 @@ export default function App() {
     if (nextMoveIdx >= puzzle.solution.length) {
       setFeedback('correct'); setScoreOk(s=>s+1)
       setHistory(h=>[...h, {...puzzle, result:'ok'}])
-      nextRef.current = setTimeout(advanceToNext, 900)
+      nextRef.current = setTimeout(advanceToNext, 400)
       return
     }
 
@@ -1197,7 +1185,7 @@ export default function App() {
       setDests(computeDests(chessRef.current))
       setMoveIdx(nextMoveIdx + 1)
       setFeedback('idle')
-    }, 550)
+    }, 300)
   }, [feedback, puzzle, loading, moveIdx, currentFen, advanceToNext, timerStarted])
 
   const startStorm = useCallback(async () => {
@@ -1361,7 +1349,7 @@ export default function App() {
   if (appState==='storm' && screen==='storm') return (
     <StormScreen
       puzzle={puzzle} currentFen={currentFen} currentTurn={currentTurn}
-      dests={dests} wrongHint={wrongHint} puzzleNum={puzzleCount+1}
+      dests={dests} puzzleNum={puzzleCount+1}
       minutes={minutes} timeLeft={timeLeft} timerStarted={timerStarted}
       scoreOk={scoreOk} scoreErr={scoreErr} feedback={feedback}
       loading={loading} error={fetchError} onRetry={loadNext}
