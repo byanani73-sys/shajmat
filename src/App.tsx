@@ -2,8 +2,14 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Chess } from 'chess.js'
 import type { Key } from 'chessground/types'
 import { ChessBoard } from './ChessBoard'
-import { getToken, saveToken, saveUser, clearAuth } from './auth'
-import { fetchUser, PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type LichessUser, type PuzzleFilters } from './lichess'
+import {
+  signInWithGoogle, signInWithEmail, signUpWithEmail, signOut,
+  onAuthStateChange, buildAuthUser, updateProfile, getProfile,
+  startLichessOAuth, handleLichessCallback, fetchLichessAccount,
+  type AuthUser,
+} from './auth'
+import { saveSession, saveSessionErrors, getBestScores, type BestScores } from './sessions'
+import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
 import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, type ThemeOption } from './themes'
 
 function useIsDesktop() {
@@ -110,33 +116,160 @@ function Spinner() {
 }
 
 // ══ Login ═════════════════════════════════════════════════════════════════════
-// Versión simplificada sin flujo de token. El auth completo (OAuth Lichess/Google)
-// se implementa en una iteración futura. La lógica de token (fetchUser, saveToken)
-// sigue disponible en el código para cuando se reactive.
-function LoginScreen({ onGuest }: { onToken:(t:string)=>Promise<void>; onGuest:()=>void }) {
+function LoginScreen({ onGuest }: { onGuest:()=>void }) {
+  const [mode,     setMode]     = useState<'main'|'email-login'|'email-signup'>('main')
+  const [email,    setEmail]    = useState('')
+  const [password, setPassword] = useState('')
+  const [loading,  setLoading]  = useState<string|null>(null)
+  const [error,    setError]    = useState<string|null>(null)
+  const [notice,   setNotice]   = useState<string|null>(null)
+
+  const handleGoogle = async () => {
+    setLoading('google'); setError(null)
+    try { await signInWithGoogle() }
+    catch { setError('No se pudo conectar con Google.'); setLoading(null) }
+  }
+
+  const handleEmailLogin = async () => {
+    if (!email || !password) { setError('Completá todos los campos'); return }
+    setLoading('email'); setError(null)
+    try { await signInWithEmail(email, password) }
+    catch (e: any) {
+      setError(e.message?.includes('Invalid') ? 'Email o contraseña incorrectos.' : (e.message ?? 'Error al iniciar sesión.'))
+      setLoading(null)
+    }
+  }
+
+  const handleEmailSignup = async () => {
+    if (!email || !password) { setError('Completá todos los campos'); return }
+    if (password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return }
+    setLoading('email'); setError(null)
+    try {
+      await signUpWithEmail(email, password)
+      setNotice('¡Cuenta creada! Revisá tu email para confirmar.')
+      setMode('main')
+    }
+    catch (e: any) {
+      setError(e.message?.includes('already') ? 'Ya existe una cuenta con ese email.' : (e.message ?? 'Error al crear cuenta.'))
+      setLoading(null)
+    }
+  }
+
+  const inputStyle: React.CSSProperties = {
+    width:'100%', padding:'12px 14px', borderRadius:10,
+    border:`1.5px solid ${C.border}`, background:C.surface,
+    fontFamily:"'DM Sans',sans-serif", fontSize:13, color:C.text,
+    outline:'none', boxSizing:'border-box',
+  }
+  const btnPrimary: React.CSSProperties = {
+    width:'100%', padding:'14px', borderRadius:10, background:C.amber,
+    border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif",
+    fontSize:14, fontWeight:700, cursor:loading?'wait':'pointer',
+    opacity:loading?0.8:1, display:'flex', alignItems:'center',
+    justifyContent:'center', gap:10,
+  }
+  const btnSecondary: React.CSSProperties = {
+    width:'100%', padding:'13px', borderRadius:10, background:C.surface,
+    border:`1px solid ${C.border}`, color:C.text, fontFamily:"'DM Sans',sans-serif",
+    fontSize:14, fontWeight:500, cursor:loading?'wait':'pointer',
+    opacity:loading?0.8:1, display:'flex', alignItems:'center',
+    justifyContent:'center', gap:10,
+  }
+
   return (
-    <div style={{
-      minHeight:'100vh', background:C.bg,
-      display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-      padding:'40px 24px', fontFamily:"'DM Sans',system-ui,sans-serif",
-      position:'relative',
-    }}>
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'40px 24px', fontFamily:"'DM Sans',system-ui,sans-serif", position:'relative' }}>
       <EasterShin />
       <div style={{ width:'100%', maxWidth:320 }}>
 
         {/* Mark + wordmark */}
-        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12, marginBottom:44 }}>
-          <ShajmatMark size={64} />
-          <div style={{ ...cinzel, fontSize:32, fontWeight:700, letterSpacing:6, color:C.text }}>SHAJMAT</div>
-          <div style={{ ...mono, fontSize:10, letterSpacing:4, textTransform:'uppercase', color:C.amber }}>
-            Táctica · precisión · golpe final
-          </div>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12, marginBottom:40 }}>
+          <ShajmatMark size={56} />
+          <div style={{ ...cinzel, fontSize:30, fontWeight:700, letterSpacing:6, color:C.text }}>SHAJMAT</div>
+          <div style={{ ...mono, fontSize:10, letterSpacing:4, textTransform:'uppercase', color:C.amber }}>Táctica · precisión · golpe final</div>
         </div>
 
-        <button onClick={onGuest}
-          style={{ width:'100%', padding:'16px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif", fontSize:15, fontWeight:600, cursor:'pointer' }}>
-          Empezar a jugar
-        </button>
+        {notice && (
+          <div style={{ padding:'12px 14px', borderRadius:10, background:'rgba(109,191,109,0.12)', border:`1px solid ${C.correct}30`, marginBottom:16 }}>
+            <p style={{ fontSize:13, color:C.correct, margin:0 }}>{notice}</p>
+          </div>
+        )}
+
+        {mode === 'main' && <>
+          {/* Google */}
+          <button onClick={handleGoogle} disabled={!!loading} style={btnSecondary}>
+            {loading==='google' ? <Spinner /> : (
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+            )}
+            Continuar con Google
+          </button>
+
+          <div style={{ display:'flex', alignItems:'center', gap:12, margin:'16px 0' }}>
+            <div style={{ flex:1, height:1, background:C.border }} />
+            <span style={{ ...mono, fontSize:9, color:C.muted, letterSpacing:2 }}>O</span>
+            <div style={{ flex:1, height:1, background:C.border }} />
+          </div>
+
+          {/* Email */}
+          <button onClick={() => { setMode('email-login'); setError(null) }} disabled={!!loading}
+            style={{ ...btnSecondary, marginBottom:8 }}>
+            Continuar con email
+          </button>
+          <button onClick={() => { setMode('email-signup'); setError(null) }} disabled={!!loading}
+            style={{ ...btnSecondary, background:'transparent', color:C.muted, marginBottom:20 }}>
+            Crear cuenta
+          </button>
+
+          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
+            <div style={{ flex:1, height:1, background:C.border }} />
+            <span style={{ ...mono, fontSize:9, color:C.muted, letterSpacing:2 }}>O</span>
+            <div style={{ flex:1, height:1, background:C.border }} />
+          </div>
+
+          <button onClick={onGuest}
+            style={{ width:'100%', padding:'13px', borderRadius:10, background:'transparent', border:`1px solid ${C.border}`, color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:14, cursor:'pointer' }}>
+            Jugar sin cuenta
+          </button>
+          <div style={{ ...mono, fontSize:10, color:C.faint, textAlign:'center', marginTop:6 }}>Sin historial · sin ELO</div>
+        </>}
+
+        {(mode === 'email-login' || mode === 'email-signup') && <>
+          <div style={{ ...mono, fontSize:10, letterSpacing:3, textTransform:'uppercase', color:C.amber, marginBottom:20 }}>
+            {mode === 'email-login' ? 'Iniciar sesión' : 'Crear cuenta'}
+          </div>
+
+          <input type="email" placeholder="tu@email.com" value={email}
+            onChange={e => setEmail(e.target.value)}
+            onKeyDown={e => e.key==='Enter' && (mode==='email-login' ? handleEmailLogin() : handleEmailSignup())}
+            style={{ ...inputStyle, marginBottom:8 }} />
+
+          <input type="password" placeholder="Contraseña" value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key==='Enter' && (mode==='email-login' ? handleEmailLogin() : handleEmailSignup())}
+            style={{ ...inputStyle, marginBottom:16 }} />
+
+          <button disabled={!!loading}
+            onClick={mode==='email-login' ? handleEmailLogin : handleEmailSignup}
+            style={{ ...btnPrimary, marginBottom:10 }}>
+            {loading==='email' && <Spinner />}
+            {loading==='email' ? 'Cargando...' : (mode==='email-login' ? 'Iniciar sesión' : 'Crear cuenta')}
+          </button>
+
+          <button onClick={() => { setMode('main'); setError(null); setEmail(''); setPassword('') }}
+            style={{ width:'100%', padding:'10px', background:'transparent', border:'none', color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, cursor:'pointer' }}>
+            ← Volver
+          </button>
+        </>}
+
+        {error && (
+          <div style={{ marginTop:14, padding:'10px 14px', borderRadius:8, background:C.redBg, border:`1px solid ${C.red}30` }}>
+            <p style={{ fontSize:12, color:C.red, margin:0 }}>{error}</p>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -351,31 +484,31 @@ function RangeSlider({ min, max, minValue, maxValue, step = 100, onChange }: {
   )
 }
 
-function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout }: {
-  user?:LichessUser; isGuest:boolean; minutes:number
+function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess }: {
+  user?:AuthUser; isGuest:boolean; minutes:number
   setMinutes:(m:number)=>void
   selectedThemes:string[]; setSelectedThemes:(s:string[])=>void
   selectedOpenings:string[]; setSelectedOpenings:(s:string[])=>void
   minRating:number; maxRating:number
   setRatingRange:(lo:number, hi:number)=>void
   onStart:()=>void; onLogout:()=>void
+  onConnectLichess:()=>void
 }) {
   const [showThemes, setShowThemes] = useState(false)
   const desktop = useIsDesktop()
-  const userElo = user?.perfs?.puzzle?.rating
+  const userElo  = user?.lichessElo
+  const username = user?.username ?? user?.email?.split('@')[0]
 
   const pillOn  = { border:`1.5px solid ${C.amber}`, background:C.amberBg, color:C.amber }
   const pillOff = { border:`1.5px solid ${C.border}`, background:C.surface, color:C.muted }
   const btnBase: React.CSSProperties = { flex:1, height:48, borderRadius:10, textAlign:'center', cursor:'pointer', border:'none', transition:'all .15s' }
 
-  // Presets
   const presets = [
     { label: 'Fácil',    lo: 600,  hi: 1200 },
     { label: 'Medio',    lo: 1200, hi: 1800 },
     { label: 'Difícil',  lo: 1800, hi: 2400 },
     { label: 'Experto',  lo: 2200, hi: 3000 },
   ]
-  // Si el user está logueado, agregamos "Mi nivel" (±200 del ELO)
   if (userElo) {
     presets.splice(2, 0, { label: 'Mi nivel', lo: Math.max(400, userElo - 200), hi: Math.min(3000, userElo + 200) })
   }
@@ -397,16 +530,30 @@ function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setS
               <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.amber, marginTop:3 }}>Storm</div>
             </div>
           </div>
+
           {!isGuest && user && (
-            <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-              <span style={{ fontSize:13, fontWeight:500, color:C.text }}>{user.username}</span>
-              {userElo && <span style={{ ...mono, fontSize:10, background:C.amberBg, color:C.amber, padding:'2px 8px', borderRadius:20, border:`1px solid ${C.borderAm}` }}>ELO {userElo}</span>}
-              <button onClick={onLogout} style={{ fontSize:12, color:C.muted, background:'none', border:'none', cursor:'pointer', marginLeft:'auto' }}>salir</button>
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                <span style={{ fontSize:13, fontWeight:500, color:C.text }}>{username}</span>
+                {userElo
+                  ? <span style={{ ...mono, fontSize:10, background:C.amberBg, color:C.amber, padding:'2px 8px', borderRadius:20, border:`1px solid ${C.borderAm}` }}>
+                      ♞ Lichess {userElo}
+                    </span>
+                  : <button onClick={onConnectLichess}
+                      style={{ ...mono, fontSize:10, color:C.amber, background:C.amberBg, border:`1px solid ${C.borderAm}`, padding:'2px 10px', borderRadius:20, cursor:'pointer' }}>
+                      + Conectar Lichess
+                    </button>
+                }
+                <button onClick={onLogout} style={{ fontSize:12, color:C.muted, background:'none', border:'none', cursor:'pointer', marginLeft:'auto' }}>salir</button>
+              </div>
+              {!userElo && (
+                <div style={{ ...mono, fontSize:9, color:C.muted }}>
+                  Conectá tu cuenta de Lichess para calibrar los puzzles a tu ELO real
+                </div>
+              )}
             </div>
           )}
         </div>
-
-        {/* Duración */}
         <div style={{ marginBottom:20 }}>
           <div style={{ fontSize:11, fontWeight:500, color:C.muted, letterSpacing:1, marginBottom:10 }}>Duración</div>
           <div style={{ display:'flex', gap:8 }}>
@@ -731,9 +878,10 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
 }
 
 
-function ResultsScreen({ minutes, scoreOk, scoreErr, history, onRepeat, onReview, onConfig }: {
+function ResultsScreen({ minutes, scoreOk, scoreErr, history, bestScores, onRepeat, onReview, onConfig }: {
   minutes:number; scoreOk:number; scoreErr:number
-  history:HistoryEntry[]; onRepeat:()=>void; onReview:()=>void; onConfig:()=>void
+  history:HistoryEntry[]; bestScores:BestScores|null
+  onRepeat:()=>void; onReview:()=>void; onConfig:()=>void
 }) {
   const total=scoreOk+scoreErr, acc=total>0?Math.round((scoreOk/total)*100):0
   const wrong=history.filter(h=>h.result==='err')
@@ -752,7 +900,7 @@ function ResultsScreen({ minutes, scoreOk, scoreErr, history, onRepeat, onReview
         </div>
 
         {/* Stats */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:24 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom: bestScores ? 16 : 24 }}>
           {[{l:'Correctos',v:scoreOk,c:C.correct},{l:'Errores',v:scoreErr,c:C.red},{l:'Precisión',v:`${acc}%`,c:C.text}].map(s=>(
             <div key={s.l} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding: desktop ? '20px 12px' : '14px 8px', textAlign:'center' }}>
               <div style={{ ...mono, fontSize: desktop ? 36 : 30, fontWeight:700, color:s.c, lineHeight:1 }}>{s.v}</div>
@@ -761,7 +909,29 @@ function ResultsScreen({ minutes, scoreOk, scoreErr, history, onRepeat, onReview
           ))}
         </div>
 
-        {/* Errors section — two columns on desktop */}
+        {/* Mejores puntajes — solo para usuarios autenticados */}
+        {bestScores && (
+          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 20px', marginBottom:24 }}>
+            <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:12 }}>Mejores puntajes</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, textAlign:'center' }}>
+              {[
+                { l:'Hoy',     v:bestScores.today },
+                { l:'Semana',  v:bestScores.week },
+                { l:'Mes',     v:bestScores.month },
+                { l:'Total',   v:bestScores.allTime },
+              ].map(s => (
+                <div key={s.l}>
+                  <div style={{ ...mono, fontSize: desktop ? 28 : 22, fontWeight:700, color: s.v === scoreOk && s.v !== null ? C.correct : C.text, lineHeight:1 }}>
+                    {s.v ?? '—'}
+                  </div>
+                  <div style={{ ...mono, fontSize:8, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginTop:4 }}>{s.l}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Errors section */}
         {wrong.length > 0 && (
           <div style={{ display: desktop ? 'grid' : 'block', gridTemplateColumns: desktop ? '1fr 1fr' : undefined, gap: desktop ? 24 : 0, marginBottom:24 }}>
             <div>
@@ -850,7 +1020,7 @@ function PreparingScreen({ minutes, error, onCancel, onRetry }: {
 // ══ Root ══════════════════════════════════════════════════════════════════════
 export default function App() {
   const [appState, setAppState] = useState<AppState>('init')
-  const [user,     setUser]     = useState<LichessUser|null>(null)
+  const [authUser, setAuthUser] = useState<AuthUser|null>(null)
   const [isGuest,  setIsGuest]  = useState(false)
   const [minutes,  setMinutes]  = useState(3)
   const [selectedThemes,   setSelectedThemes]   = useState<string[]>([])
@@ -863,7 +1033,7 @@ export default function App() {
 
   const [screen,       setScreen]       = useState<'storm'|'results'>('storm')
   const [timeLeft,     setTimeLeft]     = useState(180)
-  const [timerStarted, setTimerStarted] = useState(false)    // arranca con el 1er movimiento
+  const [timerStarted, setTimerStarted] = useState(false)
   const [puzzle,      setPuzzle]      = useState<Puzzle|null>(null)
   const [currentFen,  setCurrentFen]  = useState<string>('')
   const [currentTurn, setCurrentTurn] = useState<'white'|'black'>('white')
@@ -877,14 +1047,16 @@ export default function App() {
   const [history,     setHistory]     = useState<HistoryEntry[]>([])
   const [puzzleCount, setPuzzleCount] = useState(0)
   const [fetchError,  setFetchError]  = useState<string|null>(null)
+  const [bestScores,  setBestScores]  = useState<BestScores|null>(null)
 
-  const timerRef = useRef<ReturnType<typeof setInterval>|null>(null)
-  const nextRef  = useRef<ReturnType<typeof setTimeout>|null>(null)
-  const queueRef = useRef<PuzzleQueue|null>(null)
-  const tokenRef = useRef<string|null>(null)
-  const chessRef = useRef<Chess|null>(null)
+  const timerRef    = useRef<ReturnType<typeof setInterval>|null>(null)
+  const nextRef     = useRef<ReturnType<typeof setTimeout>|null>(null)
+  const queueRef    = useRef<PuzzleQueue|null>(null)
+  const chessRef    = useRef<Chess|null>(null)
+  const sessionStart = useRef<string>(new Date().toISOString())
+  const seenIds      = useRef<string[]>([])
 
-  // When a new puzzle loads, reset position state
+  // Cuando carga un puzzle nuevo, resetear posición
   useEffect(() => {
     if (!puzzle) return
     const c = new Chess(puzzle.fen)
@@ -896,22 +1068,37 @@ export default function App() {
     setWrongHint(null)
   }, [puzzle?.id])
 
-  // Init — check stored token
+  // Init — escuchar cambios de auth de Supabase
   useEffect(() => {
-    async function init() {
-      const token = getToken()
-      if (token) {
-        try {
-          const u = await fetchUser(token)
-          tokenRef.current = token; setUser(u); saveUser(u); setAppState('config'); return
-        } catch { clearAuth() }
+    const unsub = onAuthStateChange(async (supaUser) => {
+      if (supaUser) {
+        const built = buildAuthUser(supaUser)
+        const profile = await getProfile(supaUser.id).catch(() => null)
+        if (profile?.lichess_elo) {
+          built.lichessElo = profile.lichess_elo
+          built.lichessId  = profile.lichess_id
+          if (profile.username) built.username = profile.username
+          // Calibrar slider al ELO guardado
+          setMinRating(Math.max(400, profile.lichess_elo - 200))
+          setMaxRating(Math.min(3000, profile.lichess_elo + 200))
+        }
+
+        // Traer mejores scores si ya tiene sesiones
+        getBestScores(supaUser.id).then(setBestScores).catch(() => {})
+
+        setAuthUser(built)
+        setIsGuest(false)
+        setAppState('config')
+      } else if (appState === 'init') {
+        // Sin sesión activa → ir a login
+        setAppState('login')
       }
-      setAppState('login')
-    }
-    init()
+    })
+    return unsub
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Storm timer — solo corre después del primer movimiento del usuario
+  // Storm timer
   useEffect(() => {
     if (appState !== 'storm' || screen !== 'storm' || !timerStarted) return
     timerRef.current = setInterval(() => {
@@ -922,7 +1109,11 @@ export default function App() {
 
   const loadNext = useCallback(async () => {
     setLoading(true); setFetchError(null)
-    try { const p = await queueRef.current!.next(); setPuzzle(p); setFeedback('idle') }
+    try {
+      const p = await queueRef.current!.next()
+      seenIds.current.push(p.id)
+      setPuzzle(p); setFeedback('idle')
+    }
     catch (e) {
       if (e instanceof NoPuzzlesFoundError) {
         setFetchError('No hay puzzles con estos filtros. Probá aflojando la selección de temas o el rango de rating.')
@@ -941,17 +1132,13 @@ export default function App() {
 
   const handleMove = useCallback((orig: string, dest: string) => {
     if (feedback !== 'idle' || !puzzle || !chessRef.current || loading) return
-
-    // Arrancar el timer al primer movimiento de la sesión (estilo Lichess)
     if (!timerStarted) setTimerStarted(true)
 
     const expected  = puzzle.solution[moveIdx]
     const userMove  = orig + dest
-    // Compare first 4 chars (ignore promotion letter — accept any promotion as correct for now)
     const isCorrect = validateMove(currentFen, userMove, expected)
 
     if (!isCorrect) {
-      // Wrong — compute SAN of the expected move for the hint
       try {
         const probe = new Chess(currentFen)
         const m = probe.move({
@@ -968,27 +1155,21 @@ export default function App() {
       return
     }
 
-    // Correct — play user's move in chess.js and update state
     try {
-      chessRef.current.move({
-        from: orig, to: dest,
-        promotion: 'q', // default; chess.js ignores for non-promotion moves
-      })
+      chessRef.current.move({ from: orig, to: dest, promotion: 'q' })
     } catch { return }
 
     const nextMoveIdx = moveIdx + 1
     setCurrentFen(chessRef.current.fen())
-    setDests(new Map()) // disable moves until opponent responds or puzzle ends
+    setDests(new Map())
 
     if (nextMoveIdx >= puzzle.solution.length) {
-      // Puzzle solved!
       setFeedback('correct'); setScoreOk(s=>s+1)
       setHistory(h=>[...h, {...puzzle, result:'ok'}])
       nextRef.current = setTimeout(advanceToNext, 900)
       return
     }
 
-    // More moves: play opponent's response after a visible pause
     setFeedback('thinking')
     setMoveIdx(nextMoveIdx)
     nextRef.current = setTimeout(() => {
@@ -1008,19 +1189,13 @@ export default function App() {
     }, 550)
   }, [feedback, puzzle, loading, moveIdx, currentFen, advanceToNext, timerStarted])
 
-  const connectToken = useCallback(async (token: string) => {
-    const u = await fetchUser(token)
-    saveToken(token); saveUser(u)
-    tokenRef.current = token; setUser(u); setAppState('config')
-  }, [])
-
   const startStorm = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
     setTimeLeft(minutes*60); setPuzzleCount(0); setTimerStarted(false)
     setScoreOk(0); setScoreErr(0); setFeedback('idle'); setHistory([])
+    seenIds.current = []
+    sessionStart.current = new Date().toISOString()
     setScreen('storm')
-
-    // 1. Ir primero a pantalla de preparación
     setAppState('preparing')
     setPuzzle(null); setFetchError(null); setLoading(true)
 
@@ -1029,16 +1204,10 @@ export default function App() {
     queueRef.current = new PuzzleQueue(filters)
 
     try {
-      // 2. Traer el primer puzzle
       const first = await queueRef.current.next()
+      seenIds.current.push(first.id)
       setPuzzle(first)
-
-      // 3. Precargar el segundo en paralelo (no bloqueante — el prefetch corre
-      //    mientras el usuario ve el primero). queueRef.current.fill() ya se
-      //    llamó dentro de next(), así que esto es redundante pero explícito.
       queueRef.current.fill()
-
-      // 4. Recién ahora activar el Storm (y con él, el timer)
       setAppState('storm')
     } catch (e) {
       if (e instanceof NoPuzzlesFoundError) {
@@ -1047,23 +1216,110 @@ export default function App() {
         setFetchError((e as Error).message)
       }
       setPuzzle(null)
-      // Quedamos en 'preparing' mostrando el error para que el usuario decida
     }
     finally { setLoading(false) }
   }, [minutes, selectedThemes, selectedOpenings, minRating, maxRating])
 
-  const endSess  = useCallback(() => { clearInterval(timerRef.current!); clearTimeout(nextRef.current!); setScreen('results') }, [])
-  const goConfig = useCallback(() => { clearInterval(timerRef.current!); clearTimeout(nextRef.current!); setAppState('config'); setScreen('storm') }, [])
-  const logout   = useCallback(() => { clearAuth(); setUser(null); setIsGuest(false); tokenRef.current=null; setAppState('login') }, [])
-  const goGuest  = useCallback(() => { setIsGuest(true); setAppState('config') }, [])
+  // Guardar sesión en Supabase cuando termina (solo usuarios autenticados)
+  const endSess = useCallback(async () => {
+    clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
+    setScreen('results')
 
-  // Review (practicar errores) state
+    if (authUser && !isGuest) {
+      const groups = buildFiltersFromSelection(selectedThemes, selectedOpenings)
+      const sessionId = await saveSession({
+        user_id:      authUser.id,
+        mode:         'storm',
+        minutes,
+        themes:       Object.values(groups).flat().filter(t => !t.includes('_')),
+        opening_tags: groups.openingTags ?? [],
+        score_ok:     scoreOk,
+        score_err:    scoreErr,
+        puzzles_seen: seenIds.current,
+        started_at:   sessionStart.current,
+      })
+
+      // Guardar errores
+      if (sessionId) {
+        const errIds = history.filter(h => h.result === 'err').map(h => h.id)
+        await saveSessionErrors(sessionId, errIds)
+      }
+
+      // Refrescar mejores scores
+      getBestScores(authUser.id).then(setBestScores).catch(() => {})
+    }
+  }, [authUser, isGuest, minutes, selectedThemes, selectedOpenings, scoreOk, scoreErr, history])
+
+  const goConfig = useCallback(() => {
+    clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
+    setAppState('config'); setScreen('storm')
+  }, [])
+
+  const logout = useCallback(async () => {
+    clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
+    await signOut()
+    setAuthUser(null); setIsGuest(false)
+    setAppState('login')
+  }, [])
+
+  const goGuest = useCallback(() => {
+    setIsGuest(true); setAppState('config')
+  }, [])
+
+  // ── Lichess PKCE: manejar callback en la URL ───────────────────────────
+  // Cuando Lichess redirige de vuelta con ?code=... lo procesamos silenciosamente.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code   = params.get('code')
+    if (!code || !authUser) return
+
+    // Limpiar la URL sin recargar
+    window.history.replaceState({}, '', window.location.pathname)
+
+    async function processLichessCallback() {
+      try {
+        const token   = await handleLichessCallback(code!)
+        const account = await fetchLichessAccount(token)
+
+        // Guardar en perfil de Supabase
+        await updateProfile(authUser!.id, {
+          lichess_id:  account.id,
+          lichess_elo: account.puzzleElo,
+          username:    account.username,
+        })
+
+        // Actualizar estado local
+        setAuthUser(prev => prev ? {
+          ...prev,
+          lichessId:  account.id,
+          lichessElo: account.puzzleElo,
+          username:   account.username,
+        } : prev)
+
+        // Calibrar slider al ELO de Lichess
+        if (account.puzzleElo) {
+          setMinRating(Math.max(400, account.puzzleElo - 200))
+          setMaxRating(Math.min(3000, account.puzzleElo + 200))
+        }
+      } catch (e) {
+        console.error('Error procesando callback de Lichess:', e)
+      }
+    }
+
+    processLichessCallback()
+  }, [authUser?.id]) // solo cuando authUser esté disponible
+
+  const connectLichess = useCallback(async () => {
+    try { await startLichessOAuth() }
+    catch (e) { console.error('Error iniciando Lichess OAuth:', e) }
+  }, [])
+
+  // Review (practicar errores)
   const [reviewIdx, setReviewIdx] = useState(0)
   const reviewPuzzles = history.filter(h => h.result === 'err')
   const startReview = useCallback(() => {
     if (reviewPuzzles.length === 0) return
-    setReviewIdx(0)
-    setAppState('review')
+    setReviewIdx(0); setAppState('review')
   }, [reviewPuzzles.length])
   const nextReview = useCallback(() => {
     setReviewIdx(i => {
@@ -1074,11 +1330,39 @@ export default function App() {
   }, [reviewPuzzles.length])
   const backToResults = useCallback(() => setAppState('results'), [])
 
-  if (appState==='init') return <div style={{ minHeight:'100vh', background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', gap:10, fontFamily:"'DM Sans',sans-serif" }}><Spinner /><span style={{ ...mono, fontSize:12, color:C.muted }}>Cargando...</span></div>
-  if (appState==='login') return <LoginScreen onToken={connectToken} onGuest={goGuest} />
-  if (appState==='config') return <ConfigScreen user={user??undefined} isGuest={isGuest} minutes={minutes} setMinutes={setMinutes} selectedThemes={selectedThemes} setSelectedThemes={setSelectedThemes} selectedOpenings={selectedOpenings} setSelectedOpenings={setSelectedOpenings} minRating={minRating} maxRating={maxRating} setRatingRange={setRatingRange} onStart={startStorm} onLogout={logout} />
+  if (appState==='init') return (
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', gap:10, fontFamily:"'DM Sans',sans-serif" }}>
+      <Spinner /><span style={{ ...mono, fontSize:12, color:C.muted }}>Cargando...</span>
+    </div>
+  )
+  if (appState==='login') return <LoginScreen onGuest={goGuest} />
+  if (appState==='config') return (
+    <ConfigScreen
+      user={authUser??undefined} isGuest={isGuest}
+      minutes={minutes} setMinutes={setMinutes}
+      selectedThemes={selectedThemes} setSelectedThemes={setSelectedThemes}
+      selectedOpenings={selectedOpenings} setSelectedOpenings={setSelectedOpenings}
+      minRating={minRating} maxRating={maxRating} setRatingRange={setRatingRange}
+      onStart={startStorm} onLogout={logout} onConnectLichess={connectLichess}
+    />
+  )
   if (appState==='preparing') return <PreparingScreen minutes={minutes} error={fetchError} onCancel={goConfig} onRetry={startStorm} />
-  if (appState==='storm' && screen==='storm') return <StormScreen puzzle={puzzle} currentFen={currentFen} currentTurn={currentTurn} dests={dests} wrongHint={wrongHint} puzzleNum={puzzleCount+1} minutes={minutes} timeLeft={timeLeft} timerStarted={timerStarted} scoreOk={scoreOk} scoreErr={scoreErr} feedback={feedback} loading={loading} error={fetchError} onRetry={loadNext} onMove={handleMove} onEnd={endSess} />
+  if (appState==='storm' && screen==='storm') return (
+    <StormScreen
+      puzzle={puzzle} currentFen={currentFen} currentTurn={currentTurn}
+      dests={dests} wrongHint={wrongHint} puzzleNum={puzzleCount+1}
+      minutes={minutes} timeLeft={timeLeft} timerStarted={timerStarted}
+      scoreOk={scoreOk} scoreErr={scoreErr} feedback={feedback}
+      loading={loading} error={fetchError} onRetry={loadNext}
+      onMove={handleMove} onEnd={endSess}
+    />
+  )
   if (appState==='review') return <ReviewScreen puzzles={reviewPuzzles} idx={reviewIdx} onNext={nextReview} onBack={backToResults} />
-  return <ResultsScreen minutes={minutes} scoreOk={scoreOk} scoreErr={scoreErr} history={history} onRepeat={startStorm} onReview={startReview} onConfig={goConfig} />
+  return (
+    <ResultsScreen
+      minutes={minutes} scoreOk={scoreOk} scoreErr={scoreErr}
+      history={history} bestScores={bestScores}
+      onRepeat={startStorm} onReview={startReview} onConfig={goConfig}
+    />
+  )
 }
