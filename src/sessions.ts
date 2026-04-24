@@ -1,10 +1,12 @@
 import { supabase } from './supabase'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────
+export type Mode = 'storm' | 'streak' | 'practice'
+
 export interface SessionRecord {
   id?:          string
   user_id:      string
-  mode:         'storm'
+  mode:         Mode
   minutes:      number
   themes:       string[]
   opening_tags: string[]
@@ -47,8 +49,8 @@ export async function saveSessionErrors(sessionId: string, puzzleIds: string[]) 
   if (error) console.error('Error guardando errores:', error)
 }
 
-// ── Mejores puntajes ───────────────────────────────────────────────────────
-export async function getBestScores(userId: string): Promise<BestScores> {
+// ── Mejores puntajes (por modo) ────────────────────────────────────────────
+export async function getBestScores(userId: string, mode: 'storm' | 'streak' = 'storm'): Promise<BestScores> {
   const now   = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
   const week  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000).toISOString()
@@ -59,7 +61,7 @@ export async function getBestScores(userId: string): Promise<BestScores> {
       .from('sessions')
       .select('score_ok')
       .eq('user_id', userId)
-      .eq('mode', 'storm')
+      .eq('mode', mode)
       .gte('started_at', from)
       .order('score_ok', { ascending: false })
       .limit(1)
@@ -73,7 +75,7 @@ export async function getBestScores(userId: string): Promise<BestScores> {
       .from('sessions')
       .select('score_ok')
       .eq('user_id', userId)
-      .eq('mode', 'storm')
+      .eq('mode', mode)
       .order('score_ok', { ascending: false })
       .limit(1)
       .single(),

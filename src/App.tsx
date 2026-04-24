@@ -8,7 +8,7 @@ import {
   startLichessOAuth, handleLichessCallback, fetchLichessAccount,
   type AuthUser,
 } from './auth'
-import { saveSession, saveSessionErrors, getBestScores, type BestScores } from './sessions'
+import { saveSession, saveSessionErrors, getBestScores, type BestScores, type Mode } from './sessions'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
 import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, type ThemeOption } from './themes'
 
@@ -104,6 +104,31 @@ function ShajmatMark({ size = 40, color = C.amber }: { size?: number; color?: st
       <path d="M22 77 C22 56, 14 38, 9 26 Q7 18 12 16" stroke={color} strokeWidth="5" strokeLinecap="round"/>
       <line x1="36" y1="77" x2="36" y2="8" stroke={color} strokeWidth="5" strokeLinecap="round"/>
       <path d="M50 77 C50 56, 58 38, 63 26 Q65 18 60 16" stroke={color} strokeWidth="5" strokeLinecap="round"/>
+    </svg>
+  )
+}
+
+// ─── Mode icon — 4×4 chess board with mode-specific highlight pattern ───────
+// Storm: un cuadrado ámbar (instante táctico único)
+// Streak: cuadrados ámbar en diagonal (racha creciendo)
+// Practice: ningún cuadrado destacado (sin presión)
+function ModeIcon({ mode, size = 44, active = false }: { mode: Mode; size?: number; active?: boolean }) {
+  const cells: { r: number; c: number; light: boolean; amber: boolean }[] = []
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+    const light = (r + c) % 2 === 0
+    let amber = false
+    if (mode === 'storm'  && r === 2 && c === 1) amber = true
+    if (mode === 'streak' && r === c)            amber = true
+    cells.push({ r, c, light, amber })
+  }
+  const lightSq = active ? '#3a342a' : '#2a2620'
+  const darkSq  = active ? '#231f18' : C.surface
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40">
+      {cells.map(({ r, c, light, amber }) => (
+        <rect key={`${r}-${c}`} x={c*10} y={r*10} width={10} height={10}
+          fill={amber ? C.amber : light ? lightSq : darkSq} />
+      ))}
     </svg>
   )
 }
@@ -495,9 +520,9 @@ function RangeSlider({ min, max, minValue, maxValue, step = 100, onChange }: {
   )
 }
 
-function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess }: {
-  user?:AuthUser; isGuest:boolean; minutes:number
-  setMinutes:(m:number)=>void
+function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess }: {
+  user?:AuthUser; isGuest:boolean
+  mode:Mode; setMode:(m:Mode)=>void
   selectedThemes:string[]; setSelectedThemes:(s:string[])=>void
   selectedOpenings:string[]; setSelectedOpenings:(s:string[])=>void
   minRating:number; maxRating:number
@@ -510,9 +535,13 @@ function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setS
   const userElo  = user?.lichessElo
   const username = user?.username ?? user?.email?.split('@')[0]
 
-  const pillOn  = { border:`1.5px solid ${C.amber}`, background:C.amberBg, color:C.amber }
-  const pillOff = { border:`1.5px solid ${C.border}`, background:C.surface, color:C.muted }
-  const btnBase: React.CSSProperties = { flex:1, height:48, borderRadius:10, textAlign:'center', cursor:'pointer', border:'none', transition:'all .15s' }
+  const modeLabel    = mode === 'storm' ? 'Storm' : mode === 'streak' ? 'Streak' : 'Práctica'
+  const startLabel   = mode === 'storm' ? 'Iniciar Storm' : mode === 'streak' ? 'Iniciar Streak' : 'Empezar práctica'
+  const modeDesc: Record<Mode, string> = {
+    storm:    '3 min · contra el reloj',
+    streak:   'Sin tiempo · cae con un error',
+    practice: 'Sin tiempo · sin penalidad',
+  }
 
   const presets = [
     { label: 'Fácil',    lo: 600,  hi: 1200 },
@@ -538,7 +567,7 @@ function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setS
             <ShajmatMark size={36} />
             <div>
               <div style={{ ...cinzel, fontSize:24, fontWeight:700, letterSpacing:4, color:C.text, lineHeight:1 }}>SHAJMAT</div>
-              <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.amber, marginTop:3 }}>Storm</div>
+              <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.amber, marginTop:3 }}>{modeLabel}</div>
             </div>
           </div>
 
@@ -565,15 +594,31 @@ function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setS
             </div>
           )}
         </div>
-        <div style={{ marginBottom:20 }}>
-          <div style={{ fontSize:11, fontWeight:500, color:C.muted, letterSpacing:1, marginBottom:10 }}>Duración</div>
+        {/* Selector de modo */}
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:11, fontWeight:500, color:C.muted, letterSpacing:1, marginBottom:10 }}>Modo</div>
           <div style={{ display:'flex', gap:8 }}>
-            {[3,5,10].map(m => (
-              <button key={m} onClick={() => setMinutes(m)}
-                style={{ ...btnBase, ...(minutes===m ? pillOn : pillOff), ...mono, fontWeight:700, fontSize:22 }}>
-                {m}<span style={{ fontSize:11, fontWeight:400, marginLeft:2 }}>m</span>
-              </button>
-            ))}
+            {(['storm','streak','practice'] as Mode[]).map(m => {
+              const active = mode === m
+              const label  = m === 'storm' ? 'Storm' : m === 'streak' ? 'Streak' : 'Práctica'
+              return (
+                <button key={m} onClick={() => setMode(m)}
+                  style={{
+                    flex:1, padding:'14px 8px', borderRadius:12,
+                    border: `1.5px solid ${active ? C.amber : C.border}`,
+                    background: active ? C.amberBg : C.surface,
+                    cursor:'pointer', transition:'all .15s',
+                    display:'flex', flexDirection:'column', alignItems:'center', gap:8,
+                    fontFamily:"'DM Sans',sans-serif",
+                  }}>
+                  <ModeIcon mode={m} active={active} size={44} />
+                  <div style={{ fontSize:13, fontWeight:600, color: active ? C.amber : C.text }}>{label}</div>
+                </button>
+              )
+            })}
+          </div>
+          <div style={{ ...mono, fontSize:10, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginTop:10, textAlign:'center' }}>
+            {modeDesc[mode]}
           </div>
         </div>
 
@@ -632,20 +677,23 @@ function ConfigScreen({ user, isGuest, minutes, setMinutes, selectedThemes, setS
 
         <button onClick={onStart}
           style={{ width:'100%', padding:'16px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif", fontSize:15, fontWeight:700, cursor:'pointer' }}>
-          Iniciar Storm
+          {startLabel}
         </button>
       </div>
     </div>
   )
 }
 
-// ══ Storm ═════════════════════════════════════════════════════════════════════
-function StormScreen({ puzzle, currentFen, currentTurn, dests, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, feedback, loading, error, onRetry, onMove, onEnd }: {
+// ══ Game (Storm / Streak / Práctica) ══════════════════════════════════════════
+function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, attempts, feedback, loading, error, onRetry, onMove, onEnd, onSkip }: {
+  mode:Mode
   puzzle:Puzzle|null; currentFen:string; currentTurn:'white'|'black'; dests:Map<Key, Key[]>
   puzzleNum:number; minutes:number; timeLeft:number; timerStarted:boolean
-  scoreOk:number; scoreErr:number; feedback:Feedback; loading:boolean
+  scoreOk:number; scoreErr:number; attempts:number
+  feedback:Feedback; loading:boolean
   error:string|null; onRetry:()=>void
   onMove:(o:string,d:string)=>void; onEnd:()=>void
+  onSkip:()=>void
 }) {
   const desktop = useIsDesktop()
   const pct    = Math.round((timeLeft / (minutes*60)) * 100)
@@ -696,35 +744,70 @@ function StormScreen({ puzzle, currentFen, currentTurn, dests, puzzleNum, minute
     </div>
   )
 
+  // ── Top card varies por modo: timer / streak counter / minimal practice ──
+  const stormTimerCard = (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '24px 28px' : '12px 20px' }}>
+      <div style={{ ...mono, fontSize: desktop ? 72 : 48, fontWeight:700, letterSpacing:-3, lineHeight:1, color:timerColor, transition:'color .4s', textAlign: desktop ? 'center' : undefined }}>{fmt(timeLeft)}</div>
+      <div style={{ height:2, background:C.border, borderRadius:2, marginTop:10, overflow:'hidden' }}>
+        <div style={{ height:'100%', width:`${pct}%`, background:barColor, borderRadius:2, transition:'width 1s linear' }} />
+      </div>
+      {desktop && <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color: timerStarted ? C.muted : C.amber, textAlign:'center', marginTop:8 }}>
+        {timerStarted ? `STORM · ${minutes} MIN` : 'Jugá para comenzar'}
+      </div>}
+    </div>
+  )
+
+  const streakCard = (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '28px 28px' : '20px 20px', textAlign:'center' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.muted, marginBottom:8 }}>Racha actual</div>
+      <div style={{ ...cinzel, fontSize: desktop ? 80 : 56, fontWeight:900, color:C.amber, lineHeight:1, letterSpacing:-2 }}>{scoreOk}</div>
+    </div>
+  )
+
+  const practiceCard = (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '24px 24px' : '16px 20px', textAlign:'center' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.muted, marginBottom:6 }}>Resueltos</div>
+      <div style={{ ...mono, fontSize: desktop ? 48 : 36, fontWeight:700, color:C.text, lineHeight:1 }}>{scoreOk}</div>
+      {attempts > 0 && (
+        <div style={{ ...mono, fontSize:11, letterSpacing:2, textTransform:'uppercase', color:C.amber, marginTop:10 }}>
+          Intento {attempts + 1}
+        </div>
+      )}
+    </div>
+  )
+
   const sidePanel = (
     <div style={{ flex:1, display:'flex', flexDirection:'column', gap: desktop ? 20 : 12, minWidth:0 }}>
 
-      {/* Timer — big on desktop */}
-      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '24px 28px' : '12px 20px' }}>
-        <div style={{ ...mono, fontSize: desktop ? 72 : 48, fontWeight:700, letterSpacing:-3, lineHeight:1, color:timerColor, transition:'color .4s', textAlign: desktop ? 'center' : undefined }}>{fmt(timeLeft)}</div>
-        <div style={{ height:2, background:C.border, borderRadius:2, marginTop:10, overflow:'hidden' }}>
-          <div style={{ height:'100%', width:`${pct}%`, background:barColor, borderRadius:2, transition:'width 1s linear' }} />
-        </div>
-        {desktop && <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color: timerStarted ? C.muted : C.amber, textAlign:'center', marginTop:8 }}>
-          {timerStarted ? `STORM · ${minutes} MIN` : 'Jugá para comenzar'}
-        </div>}
-      </div>
+      {mode === 'storm' && stormTimerCard}
+      {mode === 'streak' && streakCard}
+      {mode === 'practice' && practiceCard}
 
-      {/* Scores */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-        {[{v:scoreOk,c:C.correct,l:'Correctos'},{v:scoreErr,c:C.red,l:'Errores'}].map(s=>(
-          <div key={s.l} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding: desktop ? '20px 16px' : '12px 16px', textAlign:'center' }}>
-            <div style={{ ...mono, fontSize: desktop ? 40 : 28, fontWeight:700, color:s.c, lineHeight:1 }}>{s.v}</div>
-            <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:6, textTransform:'uppercase' }}>{s.l}</div>
-          </div>
-        ))}
-      </div>
+      {/* Scores — solo en Storm (correctos vs errores) */}
+      {mode === 'storm' && (
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+          {[{v:scoreOk,c:C.correct,l:'Correctos'},{v:scoreErr,c:C.red,l:'Errores'}].map(s=>(
+            <div key={s.l} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding: desktop ? '20px 16px' : '12px 16px', textAlign:'center' }}>
+              <div style={{ ...mono, fontSize: desktop ? 40 : 28, fontWeight:700, color:s.c, lineHeight:1 }}>{s.v}</div>
+              <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:6, textTransform:'uppercase' }}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Puzzle number */}
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
         <span style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted }}>Puzzle</span>
         <span style={{ ...mono, fontSize: desktop ? 24 : 18, fontWeight:700, color:C.muted }}>#{puzzleNum}</span>
       </div>
+
+      {/* Botón Siguiente — solo en práctica, siempre visible */}
+      {mode === 'practice' && (
+        <button onClick={onSkip}
+          style={{ width:'100%', padding:'14px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.text, fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:500, cursor:'pointer' }}>
+          Siguiente →
+        </button>
+      )}
 
       {/* End session — pushed to bottom on desktop */}
       {desktop && <div style={{ flex:1 }} />}
@@ -889,14 +972,28 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
 }
 
 
-function ResultsScreen({ minutes, scoreOk, scoreErr, history, bestScores, onRepeat, onReview, onConfig }: {
+function ResultsScreen({ mode, minutes, scoreOk, scoreErr, history, bestScores, streakBreaker, onRepeat, onReview, onConfig }: {
+  mode:Mode
   minutes:number; scoreOk:number; scoreErr:number
   history:HistoryEntry[]; bestScores:BestScores|null
+  streakBreaker:HistoryEntry|null
   onRepeat:()=>void; onReview:()=>void; onConfig:()=>void
 }) {
-  const total=scoreOk+scoreErr, acc=total>0?Math.round((scoreOk/total)*100):0
-  const wrong=history.filter(h=>h.result==='err')
+  const total = scoreOk + scoreErr, acc = total > 0 ? Math.round((scoreOk/total)*100) : 0
+  const wrong = history.filter(h => h.result === 'err')
   const desktop = useIsDesktop()
+
+  const headline = mode === 'storm'  ? `Storm · ${minutes} minuto${minutes>1?'s':''}`
+                 : mode === 'streak' ? 'Streak · racha'
+                 :                     'Práctica'
+  const subLabel = mode === 'streak' ? (scoreOk === 1 ? 'puzzle en la racha' : 'puzzles en la racha')
+                 : mode === 'practice' ? 'puzzles resueltos'
+                 :                       'puzzles resueltos'
+  const repeatLabel = mode === 'storm'  ? 'Repetir Storm'
+                    : mode === 'streak' ? 'Nueva racha'
+                    :                     'Otra práctica'
+  const showBestScores = mode !== 'practice' && bestScores
+  const bestLabel = mode === 'streak' ? 'Mejores rachas' : 'Mejores puntajes'
 
   return (
     <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'40px 24px', fontFamily:"'DM Sans',system-ui,sans-serif", position:'relative' }}>
@@ -905,31 +1002,57 @@ function ResultsScreen({ minutes, scoreOk, scoreErr, history, bestScores, onRepe
 
         {/* Score headline */}
         <div style={{ textAlign:'center', marginBottom:32 }}>
-          <div style={{ ...mono, fontSize:9, letterSpacing:5, textTransform:'uppercase', color:C.muted, marginBottom:8 }}>Storm · {minutes} minuto{minutes>1?'s':''}</div>
+          <div style={{ ...mono, fontSize:9, letterSpacing:5, textTransform:'uppercase', color:C.muted, marginBottom:8 }}>{headline}</div>
           <div style={{ ...cinzel, fontSize: desktop ? 140 : 'clamp(80px,22vw,120px)', fontWeight:900, color:C.amber, lineHeight:1, letterSpacing:-3, marginBottom:4 }}>{scoreOk}</div>
-          <div style={{ ...mono, fontSize:10, letterSpacing:4, textTransform:'uppercase', color:C.muted }}>puzzles resueltos</div>
+          <div style={{ ...mono, fontSize:10, letterSpacing:4, textTransform:'uppercase', color:C.muted }}>{subLabel}</div>
         </div>
 
-        {/* Stats */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom: bestScores ? 16 : 24 }}>
-          {[{l:'Correctos',v:scoreOk,c:C.correct},{l:'Errores',v:scoreErr,c:C.red},{l:'Precisión',v:`${acc}%`,c:C.text}].map(s=>(
-            <div key={s.l} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding: desktop ? '20px 12px' : '14px 8px', textAlign:'center' }}>
-              <div style={{ ...mono, fontSize: desktop ? 36 : 30, fontWeight:700, color:s.c, lineHeight:1 }}>{s.v}</div>
-              <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginTop:6 }}>{s.l}</div>
+        {/* Stats — Storm muestra correctos/errores/precisión; Streak/Practice solo resueltos/intentos */}
+        {mode === 'storm' && (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom: showBestScores ? 16 : 24 }}>
+            {[{l:'Correctos',v:scoreOk,c:C.correct},{l:'Errores',v:scoreErr,c:C.red},{l:'Precisión',v:`${acc}%`,c:C.text}].map(s=>(
+              <div key={s.l} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding: desktop ? '20px 12px' : '14px 8px', textAlign:'center' }}>
+                <div style={{ ...mono, fontSize: desktop ? 36 : 30, fontWeight:700, color:s.c, lineHeight:1 }}>{s.v}</div>
+                <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginTop:6 }}>{s.l}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Streak: mostrar el puzzle que cortó la racha */}
+        {mode === 'streak' && streakBreaker && (
+          <div style={{ background:C.surface, border:`1px solid ${C.red}30`, borderLeft:`3px solid ${C.red}`, borderRadius:12, padding:'14px 18px', marginBottom: showBestScores ? 16 : 24, display:'flex', alignItems:'center', gap:12 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.red, marginBottom:4 }}>Cayó en</div>
+              <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{streakBreaker.theme}</div>
+              <div style={{ ...mono, fontSize:10, color:C.muted, marginTop:2 }}>#{streakBreaker.id}</div>
             </div>
-          ))}
-        </div>
+            <span style={{ ...mono, fontSize:11, background:C.amberBg, color:C.amber, padding:'4px 10px', borderRadius:20, border:`1px solid ${C.borderAm}` }}>ELO {streakBreaker.rating}</span>
+          </div>
+        )}
 
-        {/* Mejores puntajes — solo para usuarios autenticados */}
-        {bestScores && (
+        {/* Practice: solo resueltos vs intentos */}
+        {mode === 'practice' && (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:8, marginBottom:24 }}>
+            {[{l:'Resueltos',v:scoreOk,c:C.correct},{l:'Errores',v:scoreErr,c:C.muted}].map(s=>(
+              <div key={s.l} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding: desktop ? '20px 12px' : '14px 8px', textAlign:'center' }}>
+                <div style={{ ...mono, fontSize: desktop ? 36 : 30, fontWeight:700, color:s.c, lineHeight:1 }}>{s.v}</div>
+                <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginTop:6 }}>{s.l}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Mejores puntajes/rachas — solo Storm y Streak con usuario autenticado */}
+        {showBestScores && (
           <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 20px', marginBottom:24 }}>
-            <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:12 }}>Mejores puntajes</div>
+            <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:12 }}>{bestLabel}</div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, textAlign:'center' }}>
               {[
-                { l:'Hoy',     v:bestScores.today },
-                { l:'Semana',  v:bestScores.week },
-                { l:'Mes',     v:bestScores.month },
-                { l:'Total',   v:bestScores.allTime },
+                { l:'Hoy',    v:bestScores!.today },
+                { l:'Semana', v:bestScores!.week },
+                { l:'Mes',    v:bestScores!.month },
+                { l:'Total',  v:bestScores!.allTime },
               ].map(s => (
                 <div key={s.l}>
                   <div style={{ ...mono, fontSize: desktop ? 28 : 22, fontWeight:700, color: s.v === scoreOk && s.v !== null ? C.correct : C.text, lineHeight:1 }}>
@@ -942,8 +1065,8 @@ function ResultsScreen({ minutes, scoreOk, scoreErr, history, bestScores, onRepe
           </div>
         )}
 
-        {/* Errors section */}
-        {wrong.length > 0 && (
+        {/* Errors section — Storm muestra; Streak no (ya tiene streakBreaker box); Practice tampoco (no acumula history de errores) */}
+        {wrong.length > 0 && mode === 'storm' && (
           <div style={{ display: desktop ? 'grid' : 'block', gridTemplateColumns: desktop ? '1fr 1fr' : undefined, gap: desktop ? 24 : 0, marginBottom:24 }}>
             <div>
               <button onClick={onReview} style={{ width:'100%', padding:'14px 16px', background:C.amberBg, border:`1px solid ${C.borderAm}`, borderRadius:12, marginBottom:16, cursor:'pointer', display:'flex', alignItems:'center', gap:12, textAlign:'left' }}>
@@ -969,11 +1092,11 @@ function ResultsScreen({ minutes, scoreOk, scoreErr, history, bestScores, onRepe
             </div>
           </div>
         )}
-        {wrong.length===0 && <div style={{ ...mono, fontSize:11, letterSpacing:2, textTransform:'uppercase', color:C.muted, textAlign:'center', marginBottom:24 }}>Sin errores · sesión perfecta</div>}
+        {wrong.length===0 && mode !== 'streak' && <div style={{ ...mono, fontSize:11, letterSpacing:2, textTransform:'uppercase', color:C.muted, textAlign:'center', marginBottom:24 }}>Sin errores · sesión perfecta</div>}
 
         <div style={{ display:'flex', gap:8 }}>
           <button onClick={onConfig} style={{ flex:1, padding:'13px 0', borderRadius:10, border:`1px solid ${C.border}`, background:C.surface, fontSize:13, fontWeight:500, color:C.muted, cursor:'pointer', fontFamily:"'DM Sans',sans-serif" }}>Configurar</button>
-          <button onClick={onRepeat} style={{ flex:2, padding:'13px 0', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:"'DM Sans',sans-serif" }}>Repetir Storm</button>
+          <button onClick={onRepeat} style={{ flex:2, padding:'13px 0', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:"'DM Sans',sans-serif" }}>{repeatLabel}</button>
         </div>
       </div>
     </div>
@@ -983,12 +1106,13 @@ function ResultsScreen({ minutes, scoreOk, scoreErr, history, bestScores, onRepe
 // ══ Preparing ═════════════════════════════════════════════════════════════════
 // Pantalla de carga mientras se preparan los primeros puzzles. El timer del
 // Storm no arranca hasta que esto termina, para no "robar" tiempo al usuario.
-function PreparingScreen({ minutes, error, onCancel, onRetry }: {
-  minutes: number
+function PreparingScreen({ mode, error, onCancel, onRetry }: {
+  mode: Mode
   error: string | null
   onCancel: () => void
   onRetry: () => void
 }) {
+  const subtitle = mode === 'storm' ? 'Storm · 3 min' : mode === 'streak' ? 'Streak · sin tiempo' : 'Práctica'
   return (
     <div style={{
       minHeight:'100vh', background:C.bg,
@@ -999,7 +1123,7 @@ function PreparingScreen({ minutes, error, onCancel, onRetry }: {
         <ShajmatMark size={56} />
         <div style={{ ...cinzel, fontSize:24, fontWeight:700, letterSpacing:5, color:C.text }}>SHAJMAT</div>
         <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.amber }}>
-          Storm · {minutes} min
+          {subtitle}
         </div>
       </div>
 
@@ -1033,7 +1157,7 @@ export default function App() {
   const [appState, setAppState] = useState<AppState>('init')
   const [authUser, setAuthUser] = useState<AuthUser|null>(null)
   const [isGuest,  setIsGuest]  = useState(false)
-  const [minutes,  setMinutes]  = useState(3)
+  const [mode,     setMode]     = useState<Mode>('storm')
   const [selectedThemes,   setSelectedThemes]   = useState<string[]>([])
   const [selectedOpenings, setSelectedOpenings] = useState<string[]>([])
   const [minRating, setMinRating] = useState(1200)
@@ -1041,6 +1165,8 @@ export default function App() {
   const setRatingRange = useCallback((lo: number, hi: number) => {
     setMinRating(lo); setMaxRating(hi)
   }, [])
+  const STORM_MINUTES = 3
+  const minutes = STORM_MINUTES  // Storm fijo en 3 min — se mantiene la variable para timer/save
 
   const [screen,       setScreen]       = useState<'storm'|'results'>('storm')
   const [timeLeft,     setTimeLeft]     = useState(180)
@@ -1058,6 +1184,9 @@ export default function App() {
   const [puzzleCount, setPuzzleCount] = useState(0)
   const [fetchError,  setFetchError]  = useState<string|null>(null)
   const [bestScores,  setBestScores]  = useState<BestScores|null>(null)
+  const [bestStreaks, setBestStreaks] = useState<BestScores|null>(null)
+  const [attempts,    setAttempts]    = useState(0)
+  const [streakBreaker, setStreakBreaker] = useState<HistoryEntry|null>(null)
 
   const timerRef    = useRef<ReturnType<typeof setInterval>|null>(null)
   const nextRef     = useRef<ReturnType<typeof setTimeout>|null>(null)
@@ -1065,6 +1194,7 @@ export default function App() {
   const chessRef    = useRef<Chess|null>(null)
   const sessionStart = useRef<string>(new Date().toISOString())
   const seenIds      = useRef<string[]>([])
+  const endSessRef   = useRef<() => void>(() => {})
 
   // Cuando carga un puzzle nuevo, resetear posición
   useEffect(() => {
@@ -1075,6 +1205,7 @@ export default function App() {
     setCurrentTurn(puzzle.turn)
     setDests(computeDests(c))
     setMoveIdx(0)
+    setAttempts(0)
   }, [puzzle?.id])
 
   // Init — escuchar cambios de auth de Supabase
@@ -1092,8 +1223,9 @@ export default function App() {
           setMaxRating(Math.min(3000, profile.lichess_elo + 200))
         }
 
-        // Traer mejores scores si ya tiene sesiones
-        getBestScores(supaUser.id).then(setBestScores).catch(() => {})
+        // Traer mejores scores de Storm y Streak si ya tiene sesiones
+        getBestScores(supaUser.id, 'storm').then(setBestScores).catch(() => {})
+        getBestScores(supaUser.id, 'streak').then(setBestStreaks).catch(() => {})
 
         setAuthUser(built)
         setIsGuest(false)
@@ -1107,14 +1239,17 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Storm timer
+  // Storm timer (solo modo Storm)
   useEffect(() => {
-    if (appState !== 'storm' || screen !== 'storm' || !timerStarted) return
+    if (mode !== 'storm' || appState !== 'storm' || screen !== 'storm' || !timerStarted) return
     timerRef.current = setInterval(() => {
-      setTimeLeft(t => { if(t<=1){clearInterval(timerRef.current!);setScreen('results');return 0} return t-1 })
+      setTimeLeft(t => {
+        if (t <= 1) { clearInterval(timerRef.current!); endSessRef.current(); return 0 }
+        return t - 1
+      })
     }, 1000)
     return () => clearInterval(timerRef.current!)
-  }, [appState, screen, timerStarted])
+  }, [mode, appState, screen, timerStarted])
 
   const loadNext = useCallback(async () => {
     setLoading(true); setFetchError(null)
@@ -1141,16 +1276,42 @@ export default function App() {
 
   const handleMove = useCallback((orig: string, dest: string) => {
     if (feedback !== 'idle' || !puzzle || !chessRef.current || loading) return
-    if (!timerStarted) setTimerStarted(true)
+    if (mode === 'storm' && !timerStarted) setTimerStarted(true)
 
     const expected  = puzzle.solution[moveIdx]
     const userMove  = orig + dest
     const isCorrect = validateMove(currentFen, userMove, expected)
 
     if (!isCorrect) {
-      setFeedback('wrong'); setScoreErr(s=>s+1)
-      setHistory(h=>[...h, {...puzzle, result:'err'}])
-      nextRef.current = setTimeout(advanceToNext, 400)
+      setFeedback('wrong')
+      if (mode === 'storm') {
+        setScoreErr(s=>s+1)
+        setHistory(h=>[...h, {...puzzle, result:'err'}])
+        nextRef.current = setTimeout(advanceToNext, 400)
+      } else if (mode === 'streak') {
+        // Termina la racha. Animar la jugada correcta y luego ir a resultados.
+        setHistory(h=>[...h, {...puzzle, result:'err'}])
+        setStreakBreaker({...puzzle, result:'err'})
+        nextRef.current = setTimeout(() => {
+          if (!chessRef.current || !puzzle) return
+          try {
+            chessRef.current.move({
+              from: expected.slice(0, 2),
+              to:   expected.slice(2, 4),
+              promotion: expected.length > 4 ? (expected[4] as 'q'|'r'|'b'|'n') : undefined,
+            })
+            setCurrentFen(chessRef.current.fen())
+            setCurrentTurn(chessRef.current.turn() === 'w' ? 'white' : 'black')
+            setDests(new Map())
+          } catch {}
+          nextRef.current = setTimeout(() => endSessRef.current(), 900)
+        }, 250)
+      } else {
+        // practice: reintentar el mismo puzzle
+        setScoreErr(s=>s+1)
+        setAttempts(a=>a+1)
+        nextRef.current = setTimeout(() => setFeedback('idle'), 800)
+      }
       return
     }
 
@@ -1186,12 +1347,13 @@ export default function App() {
       setMoveIdx(nextMoveIdx + 1)
       setFeedback('idle')
     }, 300)
-  }, [feedback, puzzle, loading, moveIdx, currentFen, advanceToNext, timerStarted])
+  }, [mode, feedback, puzzle, loading, moveIdx, currentFen, advanceToNext, timerStarted])
 
-  const startStorm = useCallback(async () => {
+  const startSession = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
     setTimeLeft(minutes*60); setPuzzleCount(0); setTimerStarted(false)
     setScoreOk(0); setScoreErr(0); setFeedback('idle'); setHistory([])
+    setAttempts(0); setStreakBreaker(null)
     seenIds.current = []
     sessionStart.current = new Date().toISOString()
     setScreen('storm')
@@ -1228,7 +1390,7 @@ export default function App() {
       const groups = buildFiltersFromSelection(selectedThemes, selectedOpenings)
       const sessionId = await saveSession({
         user_id:      authUser.id,
-        mode:         'storm',
+        mode,
         minutes,
         themes:       Object.values(groups).flat().filter(t => !t.includes('_')),
         opening_tags: groups.openingTags ?? [],
@@ -1240,16 +1402,20 @@ export default function App() {
         started_at:   sessionStart.current,
       })
 
-      // Guardar errores
+      // Guardar errores (storm tracker errores; streak/practice también pueden tener)
       if (sessionId) {
         const errIds = history.filter(h => h.result === 'err').map(h => h.id)
         await saveSessionErrors(sessionId, errIds)
       }
 
-      // Refrescar mejores scores
-      getBestScores(authUser.id).then(setBestScores).catch(() => {})
+      // Refrescar mejores scores del modo correspondiente
+      if (mode === 'storm')  getBestScores(authUser.id, 'storm').then(setBestScores).catch(() => {})
+      if (mode === 'streak') getBestScores(authUser.id, 'streak').then(setBestStreaks).catch(() => {})
     }
-  }, [authUser, isGuest, minutes, selectedThemes, selectedOpenings, minRating, maxRating, scoreOk, scoreErr, history])
+  }, [authUser, isGuest, mode, minutes, selectedThemes, selectedOpenings, minRating, maxRating, scoreOk, scoreErr, history])
+
+  // Mantener el ref actualizado para que timer y streak handler puedan llamar endSess
+  endSessRef.current = endSess
 
   const goConfig = useCallback(() => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
@@ -1340,30 +1506,35 @@ export default function App() {
   if (appState==='config') return (
     <ConfigScreen
       user={authUser??undefined} isGuest={isGuest}
-      minutes={minutes} setMinutes={setMinutes}
+      mode={mode} setMode={setMode}
       selectedThemes={selectedThemes} setSelectedThemes={setSelectedThemes}
       selectedOpenings={selectedOpenings} setSelectedOpenings={setSelectedOpenings}
       minRating={minRating} maxRating={maxRating} setRatingRange={setRatingRange}
-      onStart={startStorm} onLogout={logout} onConnectLichess={connectLichess}
+      onStart={startSession} onLogout={logout} onConnectLichess={connectLichess}
     />
   )
-  if (appState==='preparing') return <PreparingScreen minutes={minutes} error={fetchError} onCancel={goConfig} onRetry={startStorm} />
+  if (appState==='preparing') return <PreparingScreen mode={mode} error={fetchError} onCancel={goConfig} onRetry={startSession} />
   if (appState==='storm' && screen==='storm') return (
-    <StormScreen
+    <GameScreen
+      mode={mode}
       puzzle={puzzle} currentFen={currentFen} currentTurn={currentTurn}
       dests={dests} puzzleNum={puzzleCount+1}
       minutes={minutes} timeLeft={timeLeft} timerStarted={timerStarted}
-      scoreOk={scoreOk} scoreErr={scoreErr} feedback={feedback}
+      scoreOk={scoreOk} scoreErr={scoreErr} attempts={attempts}
+      feedback={feedback}
       loading={loading} error={fetchError} onRetry={loadNext}
-      onMove={handleMove} onEnd={endSess}
+      onMove={handleMove} onEnd={endSess} onSkip={advanceToNext}
     />
   )
   if (appState==='review') return <ReviewScreen puzzles={reviewPuzzles} idx={reviewIdx} onNext={nextReview} onBack={backToResults} />
   return (
     <ResultsScreen
+      mode={mode}
       minutes={minutes} scoreOk={scoreOk} scoreErr={scoreErr}
-      history={history} bestScores={bestScores}
-      onRepeat={startStorm} onReview={startReview} onConfig={goConfig}
+      history={history}
+      bestScores={mode === 'streak' ? bestStreaks : bestScores}
+      streakBreaker={streakBreaker}
+      onRepeat={startSession} onReview={startReview} onConfig={goConfig}
     />
   )
 }
