@@ -81,6 +81,17 @@ const C = {
   red:       '#e05252',
   redBg:     'rgba(224,82,82,0.1)',
 }
+
+// ── REGLA DE CONTRASTE — leer antes de usar colores de texto ──────────────
+// C.text    (#f7f4ef)        → texto principal, títulos, valores importantes
+// C.muted   (opacity 0.4)   → labels, subtítulos, texto secundario LEGIBLE
+//                              usar para: labels de sección, hints, descriptions
+// C.faint   (opacity 0.15)  → solo para elementos casi invisibles intencionales
+//                              usar ÚNICAMENTE para: IDs de puzzle (#xyz),
+//                              marca de agua Shin (ש), easter eggs
+//                              NO usar para ningún texto que el usuario deba leer
+// ─────────────────────────────────────────────────────────────────────────
+
 const mono   = { fontFamily:"'DM Mono', monospace" }
 const cinzel = { fontFamily:"'Cinzel', serif" }
 const fmt    = (s: number) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`
@@ -209,9 +220,9 @@ function LoginScreen({ onGuest }: { onGuest:()=>void }) {
           </button>
 
           <div style={{ display:'flex', alignItems:'center', gap:12, margin:'16px 0' }}>
-            <div style={{ flex:1, height:1, background:C.border }} />
+            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.15)' }} />
             <span style={{ ...mono, fontSize:9, color:C.muted, letterSpacing:2 }}>O</span>
-            <div style={{ flex:1, height:1, background:C.border }} />
+            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.15)' }} />
           </div>
 
           {/* Email */}
@@ -225,16 +236,16 @@ function LoginScreen({ onGuest }: { onGuest:()=>void }) {
           </button>
 
           <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
-            <div style={{ flex:1, height:1, background:C.border }} />
+            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.15)' }} />
             <span style={{ ...mono, fontSize:9, color:C.muted, letterSpacing:2 }}>O</span>
-            <div style={{ flex:1, height:1, background:C.border }} />
+            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.15)' }} />
           </div>
 
           <button onClick={onGuest}
             style={{ width:'100%', padding:'13px', borderRadius:10, background:'transparent', border:`1px solid ${C.border}`, color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:14, cursor:'pointer' }}>
             Jugar sin cuenta
           </button>
-          <div style={{ ...mono, fontSize:10, color:C.faint, textAlign:'center', marginTop:6 }}>Sin historial · sin ELO</div>
+          <div style={{ ...mono, fontSize:10, color:C.muted, textAlign:'center', marginTop:6 }}>Sin historial · sin ELO</div>
         </>}
 
         {(mode === 'email-login' || mode === 'email-signup') && <>
@@ -404,7 +415,7 @@ function ThemeModal({ selectedThemes, setSelectedThemes, selectedOpenings, setSe
                         <button key={op.id} onClick={() => toggleOpening(op.id)} style={chipStyle(sel)}>
                           {op.label}
                           {op.count !== undefined && (
-                            <span style={{ ...mono, fontSize:9, color:sel ? C.amber : C.faint, opacity: low ? 0.7 : 1 }}>
+                            <span style={{ ...mono, fontSize:9, color:sel ? C.amber : C.muted, opacity: low ? 0.7 : 1 }}>
                               {op.count}
                             </span>
                           )}
