@@ -118,7 +118,7 @@ function ModeIcon({ mode, size = 44, active = false }: { mode: Mode; size?: numb
     const light = (r + c) % 2 === 0
     let amber = false
     if (mode === 'storm'  && r === 2 && c === 1) amber = true
-    if (mode === 'streak' && r === c)            amber = true
+    if (mode === 'streak' && r + c === 3)        amber = true  // diagonal ascendente (bottom-left → top-right)
     cells.push({ r, c, light, amber })
   }
   const lightSq = active ? '#3a342a' : '#2a2620'
@@ -539,7 +539,7 @@ function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelecte
   const startLabel   = mode === 'storm' ? 'Iniciar Storm' : mode === 'streak' ? 'Iniciar Streak' : 'Empezar práctica'
   const modeDesc: Record<Mode, string> = {
     storm:    '3 min · contra el reloj',
-    streak:   'Sin tiempo · cae con un error',
+    streak:   'Sin tiempo · hasta que cometas un error',
     practice: 'Sin tiempo · sin penalidad',
   }
 
@@ -685,15 +685,18 @@ function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelecte
 }
 
 // ══ Game (Storm / Streak / Práctica) ══════════════════════════════════════════
-function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, attempts, feedback, loading, error, onRetry, onMove, onEnd, onSkip }: {
+function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, attempts, feedback, loading, error, hintLevel, hintMove, solving, onRetry, onMove, onEnd, onSkip, onHint, onSolution }: {
   mode:Mode
   puzzle:Puzzle|null; currentFen:string; currentTurn:'white'|'black'; dests:Map<Key, Key[]>
   puzzleNum:number; minutes:number; timeLeft:number; timerStarted:boolean
   scoreOk:number; scoreErr:number; attempts:number
   feedback:Feedback; loading:boolean
-  error:string|null; onRetry:()=>void
+  error:string|null
+  hintLevel:0|1|2; hintMove?:string; solving:boolean
+  onRetry:()=>void
   onMove:(o:string,d:string)=>void; onEnd:()=>void
   onSkip:()=>void
+  onHint:()=>void; onSolution:()=>void
 }) {
   const desktop = useIsDesktop()
   const pct    = Math.round((timeLeft / (minutes*60)) * 100)
@@ -731,7 +734,10 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
           : loading && !puzzle
             ? <div style={{ aspectRatio:'1', background:C.surface, display:'flex', alignItems:'center', justifyContent:'center', gap:10 }}><Spinner /><span style={{ ...mono, fontSize:12, color:C.muted }}>Cargando...</span></div>
             : puzzle && currentFen
-              ? <ChessBoard key={puzzle.id} fen={currentFen} orientation={puzzle.turn} turn={currentTurn} dests={dests} onMove={onMove} feedback={feedback} />
+              ? <ChessBoard key={puzzle.id} fen={currentFen} orientation={puzzle.turn} turn={currentTurn} dests={dests} onMove={onMove} feedback={feedback}
+                  wrongRevertDelay={mode === 'practice' ? 1000 : 0}
+                  hintLevel={hintLevel} hintMove={hintMove}
+                />
               : null
         }
       </div>
@@ -801,12 +807,24 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
         <span style={{ ...mono, fontSize: desktop ? 24 : 18, fontWeight:700, color:C.muted }}>#{puzzleNum}</span>
       </div>
 
-      {/* Botón Siguiente — solo en práctica, siempre visible */}
+      {/* Botones de práctica: pista, ver solución, siguiente */}
       {mode === 'practice' && (
-        <button onClick={onSkip}
-          style={{ width:'100%', padding:'14px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.text, fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:500, cursor:'pointer' }}>
-          Siguiente →
-        </button>
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={onHint} disabled={solving || hintLevel >= 2 || feedback !== 'idle'}
+              style={{ flex:1, padding:'12px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:500, cursor: (solving || hintLevel >= 2 || feedback !== 'idle') ? 'not-allowed' : 'pointer', opacity: (solving || hintLevel >= 2 || feedback !== 'idle') ? 0.5 : 1 }}>
+              {hintLevel === 0 ? 'Pista' : hintLevel === 1 ? 'Otra pista' : 'Sin más pistas'}
+            </button>
+            <button onClick={onSolution} disabled={solving || feedback !== 'idle'}
+              style={{ flex:1, padding:'12px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:500, cursor: (solving || feedback !== 'idle') ? 'not-allowed' : 'pointer', opacity: (solving || feedback !== 'idle') ? 0.5 : 1 }}>
+              Ver solución
+            </button>
+          </div>
+          <button onClick={onSkip} disabled={solving}
+            style={{ width:'100%', padding:'14px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.text, fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:500, cursor: solving ? 'not-allowed' : 'pointer', opacity: solving ? 0.5 : 1 }}>
+            Siguiente →
+          </button>
+        </div>
       )}
 
       {/* End session — pushed to bottom on desktop */}
@@ -1187,6 +1205,8 @@ export default function App() {
   const [bestStreaks, setBestStreaks] = useState<BestScores|null>(null)
   const [attempts,    setAttempts]    = useState(0)
   const [streakBreaker, setStreakBreaker] = useState<HistoryEntry|null>(null)
+  const [hintLevel,   setHintLevel]   = useState<0|1|2>(0)
+  const [solving,     setSolving]     = useState(false)
 
   const timerRef    = useRef<ReturnType<typeof setInterval>|null>(null)
   const nextRef     = useRef<ReturnType<typeof setTimeout>|null>(null)
@@ -1206,7 +1226,12 @@ export default function App() {
     setDests(computeDests(c))
     setMoveIdx(0)
     setAttempts(0)
+    setHintLevel(0)
+    setSolving(false)
   }, [puzzle?.id])
+
+  // Resetear pista cuando avanza el moveIdx (cada nueva jugada del usuario)
+  useEffect(() => { setHintLevel(0) }, [moveIdx])
 
   // Init — escuchar cambios de auth de Supabase
   useEffect(() => {
@@ -1275,7 +1300,7 @@ export default function App() {
   }, [loadNext])
 
   const handleMove = useCallback((orig: string, dest: string) => {
-    if (feedback !== 'idle' || !puzzle || !chessRef.current || loading) return
+    if (feedback !== 'idle' || !puzzle || !chessRef.current || loading || solving) return
     if (mode === 'storm' && !timerStarted) setTimerStarted(true)
 
     const expected  = puzzle.solution[moveIdx]
@@ -1307,10 +1332,11 @@ export default function App() {
           nextRef.current = setTimeout(() => endSessRef.current(), 900)
         }, 250)
       } else {
-        // practice: reintentar el mismo puzzle
+        // practice: reintentar el mismo puzzle (estilo Lichess: pieza queda en cuadro
+        // equivocado ~1000ms, después snap-back animado, después libera input)
         setScoreErr(s=>s+1)
         setAttempts(a=>a+1)
-        nextRef.current = setTimeout(() => setFeedback('idle'), 800)
+        nextRef.current = setTimeout(() => setFeedback('idle'), 1300)
       }
       return
     }
@@ -1347,13 +1373,13 @@ export default function App() {
       setMoveIdx(nextMoveIdx + 1)
       setFeedback('idle')
     }, 300)
-  }, [mode, feedback, puzzle, loading, moveIdx, currentFen, advanceToNext, timerStarted])
+  }, [mode, feedback, puzzle, loading, solving, moveIdx, currentFen, advanceToNext, timerStarted])
 
   const startSession = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
     setTimeLeft(minutes*60); setPuzzleCount(0); setTimerStarted(false)
     setScoreOk(0); setScoreErr(0); setFeedback('idle'); setHistory([])
-    setAttempts(0); setStreakBreaker(null)
+    setAttempts(0); setStreakBreaker(null); setHintLevel(0); setSolving(false)
     seenIds.current = []
     sessionStart.current = new Date().toISOString()
     setScreen('storm')
@@ -1416,6 +1442,45 @@ export default function App() {
 
   // Mantener el ref actualizado para que timer y streak handler puedan llamar endSess
   endSessRef.current = endSess
+
+  // ── Práctica: pistas (1 = pieza, 2 = jugada completa) ───────────────────
+  const requestHint = useCallback(() => {
+    if (solving || feedback !== 'idle') return
+    setHintLevel(l => (l < 2 ? ((l + 1) as 0|1|2) : l))
+  }, [solving, feedback])
+
+  // ── Práctica: ver solución completa, animada ──────────────────────────
+  const playSolution = useCallback(() => {
+    if (solving || !puzzle || !chessRef.current) return
+    setSolving(true)
+    setFeedback('thinking')
+    setDests(new Map())
+
+    let idx = moveIdx
+    const playStep = () => {
+      if (!chessRef.current || !puzzle) return
+      if (idx >= puzzle.solution.length) {
+        setFeedback('correct')
+        nextRef.current = setTimeout(() => {
+          setSolving(false)
+          advanceToNext()
+        }, 700)
+        return
+      }
+      const m = puzzle.solution[idx]
+      try {
+        chessRef.current.move({
+          from: m.slice(0, 2), to: m.slice(2, 4),
+          promotion: m.length > 4 ? (m[4] as 'q'|'r'|'b'|'n') : undefined,
+        })
+        setCurrentFen(chessRef.current.fen())
+        setCurrentTurn(chessRef.current.turn() === 'w' ? 'white' : 'black')
+      } catch {}
+      idx += 1
+      nextRef.current = setTimeout(playStep, 550)
+    }
+    playStep()
+  }, [solving, puzzle, moveIdx, advanceToNext])
 
   const goConfig = useCallback(() => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
@@ -1522,8 +1587,13 @@ export default function App() {
       minutes={minutes} timeLeft={timeLeft} timerStarted={timerStarted}
       scoreOk={scoreOk} scoreErr={scoreErr} attempts={attempts}
       feedback={feedback}
-      loading={loading} error={fetchError} onRetry={loadNext}
+      loading={loading} error={fetchError}
+      hintLevel={hintLevel}
+      hintMove={puzzle?.solution[moveIdx]}
+      solving={solving}
+      onRetry={loadNext}
       onMove={handleMove} onEnd={endSess} onSkip={advanceToNext}
+      onHint={requestHint} onSolution={playSolution}
     />
   )
   if (appState==='review') return <ReviewScreen puzzles={reviewPuzzles} idx={reviewIdx} onNext={nextReview} onBack={backToResults} />
