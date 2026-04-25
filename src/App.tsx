@@ -2,9 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Chess } from 'chess.js'
 import type { Key } from 'chessground/types'
 import { ChessBoard } from './ChessBoard'
+import type { User } from '@supabase/supabase-js'
 import {
   signInWithGoogle, signInWithEmail, signUpWithEmail, signOut,
-  onAuthStateChange, buildAuthUser, updateProfile, getProfile,
+  onAuthStateChange, getCurrentUser, buildAuthUser, updateProfile, getProfile,
   startLichessOAuth, handleLichessCallback, fetchLichessAccount,
   type AuthUser,
 } from './auth'
@@ -1233,34 +1234,46 @@ export default function App() {
   // Resetear pista cuando avanza el moveIdx (cada nueva jugada del usuario)
   useEffect(() => { setHintLevel(0) }, [moveIdx])
 
-  // Init — escuchar cambios de auth de Supabase
+  // Init — auth de Supabase con sesión persistente
   useEffect(() => {
-    const unsub = onAuthStateChange(async (supaUser) => {
+    let mounted = true
+
+    const processUser = async (supaUser: User | null) => {
+      if (!mounted) return
       if (supaUser) {
         const built = buildAuthUser(supaUser)
         const profile = await getProfile(supaUser.id).catch(() => null)
+        if (!mounted) return
         if (profile?.lichess_elo) {
           built.lichessElo = profile.lichess_elo
           built.lichessId  = profile.lichess_id
           if (profile.username) built.username = profile.username
-          // Calibrar slider al ELO guardado
           setMinRating(Math.max(400, profile.lichess_elo - 200))
           setMaxRating(Math.min(3000, profile.lichess_elo + 200))
         }
-
-        // Traer mejores scores de Storm y Streak si ya tiene sesiones
-        getBestScores(supaUser.id, 'storm').then(setBestScores).catch(() => {})
-        getBestScores(supaUser.id, 'streak').then(setBestStreaks).catch(() => {})
-
+        getBestScores(supaUser.id, 'storm').then(s => mounted && setBestScores(s)).catch(() => {})
+        getBestScores(supaUser.id, 'streak').then(s => mounted && setBestStreaks(s)).catch(() => {})
         setAuthUser(built)
         setIsGuest(false)
         setAppState('config')
-      } else if (appState === 'init') {
-        // Sin sesión activa → ir a login
+      } else {
+        setAuthUser(null)
         setAppState('login')
       }
+    }
+
+    // Esperar a que Supabase termine de detectar la sesión (URL hash u localStorage)
+    // antes de decidir login vs config. Evita el flash de login en redirects de OAuth.
+    getCurrentUser().then(processUser)
+
+    // Suscribirse a cambios futuros: SIGNED_IN tras OAuth, SIGNED_OUT tras logout,
+    // TOKEN_REFRESHED. Ignoramos INITIAL_SESSION porque ya lo manejamos arriba.
+    const unsub = onAuthStateChange((supaUser, event) => {
+      if (event === 'INITIAL_SESSION') return
+      processUser(supaUser)
     })
-    return unsub
+
+    return () => { mounted = false; unsub() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1352,7 +1365,10 @@ export default function App() {
     if (nextMoveIdx >= puzzle.solution.length) {
       setFeedback('correct'); setScoreOk(s=>s+1)
       setHistory(h=>[...h, {...puzzle, result:'ok'}])
-      nextRef.current = setTimeout(advanceToNext, 400)
+      // En práctica, esperar a que el usuario haga click en "Siguiente" para avanzar
+      if (mode !== 'practice') {
+        nextRef.current = setTimeout(advanceToNext, 400)
+      }
       return
     }
 

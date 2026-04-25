@@ -39,11 +39,20 @@ export async function signOut(): Promise<void> {
 }
 
 // ── Auth state ────────────────────────────────────────────────────────────
-export function onAuthStateChange(cb: (user: User | null) => void) {
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-    cb(session?.user ?? null)
+// onAuthStateChange dispara INITIAL_SESSION al subscribirse, pero ese evento
+// puede llegar con null antes de que detectSessionInUrl termine de parsear el
+// hash de OAuth. Para evitar pantallazos a "login" usar getCurrentUser() al
+// arrancar y filtrar INITIAL_SESSION en el listener.
+export function onAuthStateChange(cb: (user: User | null, event: string) => void) {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    cb(session?.user ?? null, event)
   })
   return () => subscription.unsubscribe()
+}
+
+export async function getCurrentUser(): Promise<User | null> {
+  const { data: { session } } = await supabase.auth.getSession()
+  return session?.user ?? null
 }
 
 // ── Construir AuthUser desde Supabase User ─────────────────────────────────
