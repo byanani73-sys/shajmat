@@ -27,18 +27,23 @@ export interface BestScores {
 }
 
 // ── Guardar sesión ─────────────────────────────────────────────────────────
-export async function saveSession(session: SessionRecord): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('sessions')
-    .insert({
-      ...session,
-      ended_at: new Date().toISOString(),
-    })
-    .select('id')
-    .single()
+//
+// Genera un id local con crypto.randomUUID() y hace upsert para que la
+// operación sea idempotente. Esto permite reintentar el guardado desde el
+// outbox sin riesgo de crear sesiones duplicadas.
+function genId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
 
+export async function saveSession(session: SessionRecord): Promise<string | null> {
+  const id = session.id ?? genId()
+  const payload = { ...session, id, ended_at: session.ended_at ?? new Date().toISOString() }
+  const { error } = await supabase
+    .from('sessions')
+    .upsert(payload, { onConflict: 'id' })
   if (error) { console.error('Error guardando sesión:', error); return null }
-  return data?.id ?? null
+  return id
 }
 
 // ── Guardar errores de la sesión ───────────────────────────────────────────

@@ -2,11 +2,13 @@
 // Sin librerías externas — usa la API nativa.
 
 import type { Puzzle, PuzzleFilters } from './lichess'
+import type { SessionRecord } from './sessions'
 
 const DB_NAME    = 'shajmat-offline'
-const DB_VERSION = 1
-const PUZZLE_STORE = 'puzzles'
-const META_STORE   = 'meta'
+const DB_VERSION = 2  // v2: agrega store pending_sessions (outbox)
+const PUZZLE_STORE  = 'puzzles'
+const META_STORE    = 'meta'
+const PENDING_STORE = 'pending_sessions'
 const META_INITIAL_DONE = 'initial_download_done'
 
 // Estructura cruda guardada en IndexedDB (mirror de la tabla puzzles + random_seed local)
@@ -81,6 +83,10 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(META_STORE)) {
         db.createObjectStore(META_STORE, { keyPath: 'key' })
+      }
+      // v2: outbox de sesiones para reenviar al recuperar conexión
+      if (!db.objectStoreNames.contains(PENDING_STORE)) {
+        db.createObjectStore(PENDING_STORE, { keyPath: 'local_id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -196,4 +202,38 @@ export async function isInitialDownloadDone(): Promise<boolean> {
 
 export async function markInitialDownloadDone(): Promise<void> {
   await tx(META_STORE, 'readwrite', s => s.put({ key: META_INITIAL_DONE, value: true }))
+}
+
+// ─── Outbox de sesiones (para sync al recuperar conexión) ────────────────────
+//
+// Cuando saveSession() falla offline, encolamos la sesión completa acá.
+// El offlineOutbox.ts las reintenta al detectar 'online' y al arrancar la app.
+export interface PendingSession {
+  local_id:       string         // UUID local para tracking en el outbox
+  session:        SessionRecord  // los datos a subir (incluye un id explícito para idempotencia)
+  err_puzzle_ids: string[]
+  created_at:     number
+}
+
+export async function queuePendingSession(session: SessionRecord, errPuzzleIds: string[]): Promise<void> {
+  const entry: PendingSession = {
+    local_id:       (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+    session,
+    err_puzzle_ids: errPuzzleIds,
+    created_at:     Date.now(),
+  }
+  await tx(PENDING_STORE, 'readwrite', s => s.put(entry))
+}
+
+export async function getPendingSessions(): Promise<PendingSession[]> {
+  const rows = await tx<PendingSession[]>(PENDING_STORE, 'readonly', s => s.getAll())
+  return rows ?? []
+}
+
+export async function removePendingSession(localId: string): Promise<void> {
+  await tx(PENDING_STORE, 'readwrite', s => s.delete(localId))
+}
+
+export async function countPendingSessions(): Promise<number> {
+  return tx(PENDING_STORE, 'readonly', s => s.count())
 }

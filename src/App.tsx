@@ -12,6 +12,8 @@ import {
 import { saveSession, saveSessionErrors, getBestScores, type BestScores, type Mode } from './sessions'
 import { saveFeedback } from './feedback'
 import { runOfflineSync, installOnlineSyncListener } from './offlineSync'
+import { flushPendingSessions, installOnlineOutboxListener } from './offlineOutbox'
+import { queuePendingSession } from './offlineDb'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
 import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, type ThemeOption } from './themes'
 
@@ -1431,16 +1433,30 @@ export default function App() {
     window.addEventListener('online',  onOnline)
     window.addEventListener('offline', onOffline)
     installOnlineSyncListener()
+    installOnlineOutboxListener()
     return () => {
       window.removeEventListener('online',  onOnline)
       window.removeEventListener('offline', onOffline)
     }
   }, [])
 
-  // ── Iniciar descarga en background al llegar al config ─────────────────
-  // Idempotente: si ya está corriendo o ya terminó la fase A, no duplica trabajo.
+  // ── Iniciar descarga + flush de sesiones pendientes al llegar al config ──
+  // Idempotente: si ya está corriendo o ya terminó la fase A, no duplica.
+  // El flush sube cualquier sesión que haya quedado encolada offline.
   useEffect(() => {
-    if (appState === 'config') runOfflineSync()
+    if (appState === 'config') {
+      runOfflineSync()
+      flushPendingSessions().then(n => {
+        if (n > 0) {
+          // Refrescar best scores con las sesiones que recién se subieron
+          if (authUser) {
+            getBestScores(authUser.id, 'storm').then(setBestScores).catch(() => {})
+            getBestScores(authUser.id, 'streak').then(setBestStreaks).catch(() => {})
+          }
+        }
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appState])
 
   // Init — auth de Supabase con sesión persistente
@@ -1639,7 +1655,7 @@ export default function App() {
 
     if (authUser && !isGuest) {
       const groups = buildFiltersFromSelection(selectedThemes, selectedOpenings)
-      const sessionId = await saveSession({
+      const sessionData = {
         user_id:      authUser.id,
         mode,
         minutes,
@@ -1651,12 +1667,17 @@ export default function App() {
         score_err:    scoreErr,
         puzzles_seen: seenIds.current,
         started_at:   sessionStart.current,
-      })
+      }
+      const errIds = history.filter(h => h.result === 'err').map(h => h.id)
+      const sessionId = await saveSession(sessionData)
 
-      // Guardar errores (storm tracker errores; streak/practice también pueden tener)
       if (sessionId) {
-        const errIds = history.filter(h => h.result === 'err').map(h => h.id)
-        await saveSessionErrors(sessionId, errIds)
+        if (errIds.length > 0) await saveSessionErrors(sessionId, errIds)
+      } else {
+        // Falló la subida (probablemente offline). Encolar en el outbox para
+        // reintentar cuando vuelva la conexión. saveSession usa upsert con id
+        // explícito así que el reintento es idempotente.
+        await queuePendingSession(sessionData, errIds)
       }
 
       // Refrescar mejores scores del modo correspondiente
