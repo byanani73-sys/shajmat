@@ -1627,7 +1627,6 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
   onHint:()=>void; onSolution:()=>void
 }) {
   const desktop = useIsDesktop()
-  const [expanded, setExpanded]   = useState(false)
   const [soundOn,  setSoundOn]    = useState(() => isSoundEnabled())
   const pct    = Math.round((timeLeft / (minutes*60)) * 100)
   // Aviso de 30s: el timer se pinta rojo en cuanto queden <= 30 segundos.
@@ -1642,10 +1641,12 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
                : loading              ? 'Cargando puzzle...'
                : `${currentTurn==='white'?'Blancas':'Negras'} juegan`
 
-  // boardArea como función para reusar en modo normal y expandido con widths distintos.
-  // showExpand: si overlay del botón ↗ se muestra (solo desktop, modo normal).
-  const renderBoardArea = (boardWidth: string | undefined, showExpand: boolean) => (
-    <div style={{ flex: desktop && boardWidth ? '0 0 auto' : undefined, width: boardWidth ?? '100%' }}>
+  // Tablero siempre en tamaño grande (580px en desktop, full-width en mobile).
+  // Antes había un toggle ↗ con overlay; se eliminó porque sumaba un click extra
+  // y los usuarios preferían el tablero grande siempre.
+  const boardWidth = desktop ? '580px' : undefined
+  const boardArea = (
+    <div style={{ flex: desktop ? '0 0 auto' : undefined, width: boardWidth ?? '100%' }}>
       {/* Tags */}
       {puzzle && (
         <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:10 }}>
@@ -1673,20 +1674,6 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
                 />
               : null
         }
-        {/* Botón ↗ para expandir el tablero — solo desktop, modo normal */}
-        {showExpand && desktop && puzzle && !error && (
-          <button onClick={() => setExpanded(true)} title="Expandir tablero"
-            style={{
-              position:'absolute', bottom:6, right:6, width:22, height:22,
-              background:'rgba(0,0,0,0.45)', border:'1px solid rgba(255,255,255,0.2)',
-              borderRadius:5, padding:0, cursor:'pointer',
-              display:'flex', alignItems:'center', justifyContent:'center',
-            }}>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M2 6L2 2L6 2M10 6L10 10L6 10" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </button>
-        )}
       </div>
 
       {/* Feedback strip */}
@@ -1696,8 +1683,6 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
       </div>
     </div>
   )
-
-  const boardArea = renderBoardArea(desktop ? 'min(460px, 55vw)' : undefined, true)
 
   // ── Top card varies por modo: timer / streak counter / minimal practice ──
   const stormTimerCard = (
@@ -1811,42 +1796,16 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
     </button>
   )
 
-  // En modo expandido: overlay fullscreen con tablero grande + side panel.
-  // En modo normal: layout estándar. Renderizamos UNA u OTRA, no las dos a la
-  // vez (sino se duplica el ChessBoard y se pelean por el DOM).
-  if (expanded && desktop) {
-    return (
-      <div onClick={() => setExpanded(false)}
-        style={{
-          position:'fixed', inset:0, background:'rgba(0,0,0,0.82)', zIndex:100,
-          display:'flex', alignItems:'center', justifyContent:'center', padding:32,
-        }}>
-        <button onClick={() => setExpanded(false)} title="Cerrar"
-          style={{
-            position:'absolute', top:16, right:16, width:30, height:30,
-            borderRadius:6, background:'rgba(255,255,255,0.08)', border:'none',
-            color:C.text, fontSize:18, cursor:'pointer', display:'flex',
-            alignItems:'center', justifyContent:'center', padding:0, zIndex:1,
-          }}>×</button>
-        <div onClick={e => e.stopPropagation()}
-          style={{ display:'flex', alignItems:'flex-start', gap:20 }}>
-          {renderBoardArea('580px', false)}
-          <div style={{ width:240, display:'flex', flexDirection:'column' }}>{sidePanel}</div>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent: desktop ? 'center' : 'flex-start', padding: desktop ? '40px 48px' : '16px 16px 24px', fontFamily:"'DM Sans',system-ui,sans-serif", position:'relative' }}>
       {soundToggle}
       <div style={{
         width:'100%',
-        maxWidth: desktop ? 900 : 460,
-        display: desktop ? 'flex' : 'flex',
+        maxWidth: desktop ? 940 : 460,
+        display:'flex',
         flexDirection: desktop ? 'row' : 'column',
         alignItems: desktop ? 'flex-start' : 'center',
-        gap: desktop ? 32 : 12,
+        gap: desktop ? 28 : 12,
       }}>
         {desktop ? <>{boardArea}{sidePanel}</> : <>{sidePanel}{boardArea}</>}
       </div>
@@ -2221,6 +2180,8 @@ export default function App() {
   const seenIds      = useRef<string[]>([])
   const endSessRef   = useRef<() => void>(() => {})
   const warnedRef    = useRef(false)  // aviso de 30s — disparar solo una vez por sesión
+  const skipPushRef  = useRef(false)  // popstate → no rebobinar el push de history
+  const lastStateRef = useRef<AppState>('init')  // para detectar transiciones automáticas
 
   // Cuando carga un puzzle nuevo, resetear posición
   useEffect(() => {
@@ -2253,6 +2214,66 @@ export default function App() {
       window.removeEventListener('offline', onOffline)
     }
   }, [])
+
+  // ── Botón "atrás" del browser / PWA ─────────────────────────────────────
+  // En la PWA Android la flechita de hardware/sistema dispara popstate. Sin
+  // pushState propio, eso cierra la app; con esto, navega entre pantallas
+  // como dashboard → config, results → config, review → results.
+  //
+  // Estrategia:
+  //  1) Cada vez que appState cambia hacia un estado "profundo" (no config),
+  //     pusheamos una entrada nueva en history. Las transiciones automáticas
+  //     (preparing→storm→results) usan replaceState para que toda la sesión
+  //     ocupe una sola entrada — un solo back para salir.
+  //  2) popstate → leemos el appState actual y lo "rebobinamos" al lógico
+  //     anterior. Marcamos skipPushRef para que el efecto de push no vuelva
+  //     a empujar tras el setAppState.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (skipPushRef.current) {
+      skipPushRef.current = false
+      lastStateRef.current = appState
+      return
+    }
+    const prev = lastStateRef.current
+    lastStateRef.current = appState
+
+    // No tocamos history en estados "raíz"
+    if (appState === 'init' || appState === 'login' || appState === 'config') return
+
+    // Transiciones automáticas dentro de una sesión: replace (no agrega entrada)
+    const isAutoTransition =
+      (prev === 'preparing' && appState === 'storm') ||
+      (prev === 'storm'     && appState === 'results')
+
+    if (isAutoTransition) window.history.replaceState({ appState }, '')
+    else                  window.history.pushState   ({ appState }, '')
+  }, [appState])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onPop = () => {
+      skipPushRef.current = true
+      // Determinar a dónde "volver" según el estado actual
+      // (lo capturamos del closure — el listener se re-suscribe por la dep)
+      if (appState === 'dashboard') {
+        setAppState('config'); setScreen('storm')
+      } else if (appState === 'preparing' || appState === 'storm') {
+        clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
+        setAppState('config'); setScreen('storm')
+      } else if (appState === 'results') {
+        setAppState('config'); setScreen('storm')
+      } else if (appState === 'review') {
+        setAppState('results')
+      } else {
+        // En config/login/init no hacemos nada — el browser ya consumió la
+        // entrada y la próxima vez que el usuario presione atrás cierra la app
+        skipPushRef.current = false
+      }
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [appState])
 
   // ── Iniciar descarga + flush de sesiones pendientes al llegar al config ──
   // Idempotente: si ya está corriendo o ya terminó la fase A, no duplica.
