@@ -1,6 +1,7 @@
 import { Chess }    from 'chess.js'
 import { LICHESS }  from './auth'
 import { supabase } from './supabase'
+import { getRandomPuzzleOffline } from './offlineDb'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface LichessUser {
@@ -93,32 +94,55 @@ function toPuzzle(row: SupabasePuzzle): Puzzle {
 const nn = (a?: string[]) => (a && a.length > 0 ? a : null)
 
 // ── Fetch con filtros ─────────────────────────────────────────────────────────
+//
+// Estrategia: intentar Supabase primero (siempre da el set más actualizado).
+// Si falla por falta de conexión o si Supabase no responde, usar IndexedDB
+// como fallback. Si tampoco hay nada offline, lanzar un error descriptivo.
 export async function fetchNextPuzzle(
   filters: PuzzleFilters = {},
   excludeIds: string[] = [],
 ): Promise<Puzzle> {
-  const { data, error } = await supabase.rpc('get_random_puzzle', {
-    mate_themes:     nn(filters.mateThemes),
-    mate_patterns:   nn(filters.matePatterns),
-    tactics:         nn(filters.tactics),
-    phases:          nn(filters.phases),
-    endgame_types:   nn(filters.endgameTypes),
-    lengths:         nn(filters.lengths),
-    evaluations:     nn(filters.evaluations),
-    openings_filter: nn(filters.openingTags),
-    min_rating:      filters.minRating ?? 400,
-    max_rating:      filters.maxRating ?? 3000,
-    exclude_ids:     excludeIds,
-  })
+  // Si el browser sabe que estamos offline, ir directo al fallback (más rápido)
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return fetchOfflineOrThrow(filters, excludeIds)
+  }
 
-  if (error) throw new Error(`Supabase: ${error.message}`)
-  if (!data || data.length === 0) throw new NoPuzzlesFoundError()
+  try {
+    const { data, error } = await supabase.rpc('get_random_puzzle', {
+      mate_themes:     nn(filters.mateThemes),
+      mate_patterns:   nn(filters.matePatterns),
+      tactics:         nn(filters.tactics),
+      phases:          nn(filters.phases),
+      endgame_types:   nn(filters.endgameTypes),
+      lengths:         nn(filters.lengths),
+      evaluations:     nn(filters.evaluations),
+      openings_filter: nn(filters.openingTags),
+      min_rating:      filters.minRating ?? 400,
+      max_rating:      filters.maxRating ?? 3000,
+      exclude_ids:     excludeIds,
+    })
 
-  const row = data[0] as SupabasePuzzle
-  try { new Chess(row.fen) }
-  catch { throw new Error(`FEN inválido en puzzle ${row.id}`) }
+    if (error) throw new Error(`Supabase: ${error.message}`)
+    if (!data || data.length === 0) throw new NoPuzzlesFoundError()
 
-  return toPuzzle(row)
+    const row = data[0] as SupabasePuzzle
+    try { new Chess(row.fen) }
+    catch { throw new Error(`FEN inválido en puzzle ${row.id}`) }
+
+    return toPuzzle(row)
+  } catch (e) {
+    // NoPuzzlesFoundError no debería caer al fallback — el filtro no matchea nada,
+    // probablemente offline tampoco encontremos. Re-throw.
+    if (e instanceof NoPuzzlesFoundError) throw e
+    // Errores de red / Supabase caído → fallback offline
+    return fetchOfflineOrThrow(filters, excludeIds)
+  }
+}
+
+async function fetchOfflineOrThrow(filters: PuzzleFilters, excludeIds: string[]): Promise<Puzzle> {
+  const offline = await getRandomPuzzleOffline(filters, excludeIds)
+  if (!offline) throw new Error('Sin conexión y sin puzzles descargados')
+  return offline
 }
 
 // ── Contar puzzles disponibles (UI feedback) ─────────────────────────────────

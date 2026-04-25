@@ -11,6 +11,7 @@ import {
 } from './auth'
 import { saveSession, saveSessionErrors, getBestScores, type BestScores, type Mode } from './sessions'
 import { saveFeedback } from './feedback'
+import { runOfflineSync, installOnlineSyncListener } from './offlineSync'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
 import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, type ThemeOption } from './themes'
 
@@ -629,8 +630,8 @@ function FeedbackModal({ userId, onClose }: { userId?: string; onClose: () => vo
   )
 }
 
-function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess }: {
-  user?:AuthUser; isGuest:boolean
+function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess }: {
+  user?:AuthUser; isGuest:boolean; isOnline:boolean
   mode:Mode; setMode:(m:Mode)=>void
   selectedThemes:string[]; setSelectedThemes:(s:string[])=>void
   selectedOpenings:string[]; setSelectedOpenings:(s:string[])=>void
@@ -680,6 +681,11 @@ function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelecte
               <div style={{ ...cinzel, fontSize:24, fontWeight:700, letterSpacing:4, color:C.text, lineHeight:1 }}>SHAJMAT</div>
               <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.amber, marginTop:3 }}>{modeLabel}</div>
             </div>
+            {!isOnline && (
+              <div style={{ ...mono, fontSize:9, letterSpacing:1, color:C.muted, marginLeft:'auto' }}>
+                Sin conexión · puzzles offline
+              </div>
+            )}
           </div>
 
           {!isGuest && user && (
@@ -1386,6 +1392,7 @@ export default function App() {
   const [fetchError,  setFetchError]  = useState<string|null>(null)
   const [bestScores,  setBestScores]  = useState<BestScores|null>(null)
   const [bestStreaks, setBestStreaks] = useState<BestScores|null>(null)
+  const [isOnline,    setIsOnline]    = useState<boolean>(typeof navigator === 'undefined' ? true : navigator.onLine)
   const [attempts,    setAttempts]    = useState(0)
   const [streakBreaker, setStreakBreaker] = useState<HistoryEntry|null>(null)
   const [hintLevel,   setHintLevel]   = useState<0|1|2>(0)
@@ -1415,6 +1422,26 @@ export default function App() {
 
   // Resetear pista cuando avanza el moveIdx (cada nueva jugada del usuario)
   useEffect(() => { setHintLevel(0) }, [moveIdx])
+
+  // ── Online / offline awareness ───────────────────────────────────────────
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onOnline  = () => setIsOnline(true)
+    const onOffline = () => setIsOnline(false)
+    window.addEventListener('online',  onOnline)
+    window.addEventListener('offline', onOffline)
+    installOnlineSyncListener()
+    return () => {
+      window.removeEventListener('online',  onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+  }, [])
+
+  // ── Iniciar descarga en background al llegar al config ─────────────────
+  // Idempotente: si ya está corriendo o ya terminó la fase A, no duplica trabajo.
+  useEffect(() => {
+    if (appState === 'config') runOfflineSync()
+  }, [appState])
 
   // Init — auth de Supabase con sesión persistente
   useEffect(() => {
@@ -1768,7 +1795,7 @@ export default function App() {
   if (appState==='login') return <LoginScreen onGuest={goGuest} />
   if (appState==='config') return (
     <ConfigScreen
-      user={authUser??undefined} isGuest={isGuest}
+      user={authUser??undefined} isGuest={isGuest} isOnline={isOnline}
       mode={mode} setMode={setMode}
       selectedThemes={selectedThemes} setSelectedThemes={setSelectedThemes}
       selectedOpenings={selectedOpenings} setSelectedOpenings={setSelectedOpenings}
