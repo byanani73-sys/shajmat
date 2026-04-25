@@ -18,6 +18,7 @@ import {
 } from './sessions'
 import { saveFeedback } from './feedback'
 import { runOfflineSync, installOnlineSyncListener } from './offlineSync'
+import { playCorrect, playWrong, playMove, playWarning, isSoundEnabled, toggleSound } from './sounds'
 import { flushPendingSessions, installOnlineOutboxListener } from './offlineOutbox'
 import { queuePendingSession } from './offlineDb'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
@@ -1458,8 +1459,12 @@ function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, 
               <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
                 <span style={{ fontSize:13, fontWeight:500, color:C.text }}>{username}</span>
                 {userElo
-                  ? <span style={{ ...mono, fontSize:10, background:C.amberBg, color:C.amber, padding:'2px 8px', borderRadius:20, border:`1px solid ${C.borderAm}` }}>
-                      ♞ Lichess {userElo}
+                  ? <span
+                      title={user.lichessEloFormat
+                        ? `ELO ${user.lichessEloFormat.charAt(0).toUpperCase()}${user.lichessEloFormat.slice(1)} · Lichess`
+                        : 'ELO Lichess'}
+                      style={{ ...mono, fontSize:10, background:C.amberBg, color:C.amber, padding:'2px 8px', borderRadius:20, border:`1px solid ${C.borderAm}` }}>
+                      ♞ {userElo}
                     </span>
                   : <button onClick={onConnectLichess}
                       style={{ ...mono, fontSize:10, color:C.amber, background:C.amberBg, border:`1px solid ${C.borderAm}`, padding:'2px 10px', borderRadius:20, cursor:'pointer' }}>
@@ -1622,8 +1627,11 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
   onHint:()=>void; onSolution:()=>void
 }) {
   const desktop = useIsDesktop()
+  const [expanded, setExpanded]   = useState(false)
+  const [soundOn,  setSoundOn]    = useState(() => isSoundEnabled())
   const pct    = Math.round((timeLeft / (minutes*60)) * 100)
-  const isCrit = timerStarted && timeLeft < 30
+  // Aviso de 30s: el timer se pinta rojo en cuanto queden <= 30 segundos.
+  const isCrit = timerStarted && timeLeft <= 30 && timeLeft > 0
   const timerColor = isCrit ? C.red : (timerStarted ? C.amber : C.muted)
   const barColor   = isCrit ? C.red : C.amber
   const fbBg   = feedback==='correct' ? C.correctBg : feedback==='wrong' ? C.redBg : 'transparent'
@@ -1634,8 +1642,10 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
                : loading              ? 'Cargando puzzle...'
                : `${currentTurn==='white'?'Blancas':'Negras'} juegan`
 
-  const boardArea = (
-    <div style={{ flex: desktop ? '0 0 auto' : undefined, width: desktop ? 'min(460px, 55vw)' : '100%' }}>
+  // boardArea como función para reusar en modo normal y expandido con widths distintos.
+  // showExpand: si overlay del botón ↗ se muestra (solo desktop, modo normal).
+  const renderBoardArea = (boardWidth: string | undefined, showExpand: boolean) => (
+    <div style={{ flex: desktop && boardWidth ? '0 0 auto' : undefined, width: boardWidth ?? '100%' }}>
       {/* Tags */}
       {puzzle && (
         <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:10 }}>
@@ -1647,7 +1657,7 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
       )}
 
       {/* Board */}
-      <div style={{ borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
+      <div style={{ position:'relative', borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
         {error
           ? <div style={{ aspectRatio:'1', background:C.surface, border:`1px solid ${C.red}30`, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:24, textAlign:'center' }}>
               <div style={{ fontSize:14, fontWeight:600, color:C.red }}>Sin puzzles disponibles</div>
@@ -1663,6 +1673,20 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
                 />
               : null
         }
+        {/* Botón ↗ para expandir el tablero — solo desktop, modo normal */}
+        {showExpand && desktop && puzzle && !error && (
+          <button onClick={() => setExpanded(true)} title="Expandir tablero"
+            style={{
+              position:'absolute', bottom:6, right:6, width:22, height:22,
+              background:'rgba(0,0,0,0.45)', border:'1px solid rgba(255,255,255,0.2)',
+              borderRadius:5, padding:0, cursor:'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 6L2 2L6 2M10 6L10 10L6 10" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Feedback strip */}
@@ -1673,10 +1697,12 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
     </div>
   )
 
+  const boardArea = renderBoardArea(desktop ? 'min(460px, 55vw)' : undefined, true)
+
   // ── Top card varies por modo: timer / streak counter / minimal practice ──
   const stormTimerCard = (
     <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '24px 28px' : '12px 20px' }}>
-      <div style={{ ...mono, fontSize: desktop ? 72 : 48, fontWeight:700, letterSpacing:-3, lineHeight:1, color:timerColor, transition:'color .4s', textAlign: desktop ? 'center' : undefined }}>{fmt(timeLeft)}</div>
+      <div style={{ ...mono, fontSize: desktop ? 72 : 48, fontWeight:700, letterSpacing:-3, lineHeight:1, color:timerColor, textAlign: desktop ? 'center' : undefined }}>{fmt(timeLeft)}</div>
       <div style={{ height:2, background:C.border, borderRadius:2, marginTop:10, overflow:'hidden' }}>
         <div style={{ height:'100%', width:`${pct}%`, background:barColor, borderRadius:2, transition:'width 1s linear' }} />
       </div>
@@ -1758,8 +1784,62 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
     </div>
   )
 
+  // Botón de toggle de sonido — esquina superior derecha del área de juego, discreto
+  const soundToggle = (
+    <button
+      onClick={() => setSoundOn(toggleSound())}
+      title={soundOn ? 'Sonido activado' : 'Sonido desactivado'}
+      style={{
+        position:'absolute', top: desktop ? 16 : 12, right: desktop ? 16 : 12, zIndex: 5,
+        width:32, height:32, borderRadius:8, padding:0, cursor:'pointer',
+        background:'transparent', border:`1px solid ${C.border}`,
+        color: soundOn ? C.amber : C.muted,
+        display:'flex', alignItems:'center', justifyContent:'center',
+      }}>
+      {soundOn ? (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M3 6V10H5L8 12.5V3.5L5 6H3Z" fill="currentColor"/>
+          <path d="M10.5 5C11.5 5.8 11.5 10.2 10.5 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+        </svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M3 6V10H5L8 12.5V3.5L5 6H3Z" fill="currentColor"/>
+          <line x1="11" y1="5" x2="14" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="14" y1="5" x2="11" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+        </svg>
+      )}
+    </button>
+  )
+
+  // En modo expandido: overlay fullscreen con tablero grande + side panel.
+  // En modo normal: layout estándar. Renderizamos UNA u OTRA, no las dos a la
+  // vez (sino se duplica el ChessBoard y se pelean por el DOM).
+  if (expanded && desktop) {
+    return (
+      <div onClick={() => setExpanded(false)}
+        style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.82)', zIndex:100,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:32,
+        }}>
+        <button onClick={() => setExpanded(false)} title="Cerrar"
+          style={{
+            position:'absolute', top:16, right:16, width:30, height:30,
+            borderRadius:6, background:'rgba(255,255,255,0.08)', border:'none',
+            color:C.text, fontSize:18, cursor:'pointer', display:'flex',
+            alignItems:'center', justifyContent:'center', padding:0, zIndex:1,
+          }}>×</button>
+        <div onClick={e => e.stopPropagation()}
+          style={{ display:'flex', alignItems:'flex-start', gap:20 }}>
+          {renderBoardArea('580px', false)}
+          <div style={{ width:240, display:'flex', flexDirection:'column' }}>{sidePanel}</div>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent: desktop ? 'center' : 'flex-start', padding: desktop ? '40px 48px' : '16px 16px 24px', fontFamily:"'DM Sans',system-ui,sans-serif" }}>
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent: desktop ? 'center' : 'flex-start', padding: desktop ? '40px 48px' : '16px 16px 24px', fontFamily:"'DM Sans',system-ui,sans-serif", position:'relative' }}>
+      {soundToggle}
       <div style={{
         width:'100%',
         maxWidth: desktop ? 900 : 460,
@@ -2140,6 +2220,7 @@ export default function App() {
   const sessionStart = useRef<string>(new Date().toISOString())
   const seenIds      = useRef<string[]>([])
   const endSessRef   = useRef<() => void>(() => {})
+  const warnedRef    = useRef(false)  // aviso de 30s — disparar solo una vez por sesión
 
   // Cuando carga un puzzle nuevo, resetear posición
   useEffect(() => {
@@ -2242,8 +2323,11 @@ export default function App() {
     if (mode !== 'storm' || appState !== 'storm' || screen !== 'storm' || section !== 'train' || !timerStarted) return
     timerRef.current = setInterval(() => {
       setTimeLeft(t => {
+        const next = t - 1
+        // Aviso de 30 segundos — disparar UNA sola vez por sesión
+        if (next === 30 && !warnedRef.current) { warnedRef.current = true; playWarning() }
         if (t <= 1) { clearInterval(timerRef.current!); endSessRef.current(); return 0 }
-        return t - 1
+        return next
       })
     }, 1000)
     return () => clearInterval(timerRef.current!)
@@ -2282,6 +2366,7 @@ export default function App() {
 
     if (!isCorrect) {
       setFeedback('wrong')
+      playWrong()
       if (mode === 'storm') {
         setScoreErr(s=>s+1)
         setHistory(h=>[...h, {...puzzle, result:'err'}])
@@ -2325,6 +2410,7 @@ export default function App() {
     if (nextMoveIdx >= puzzle.solution.length) {
       setFeedback('correct'); setScoreOk(s=>s+1)
       setHistory(h=>[...h, {...puzzle, result:'ok'}])
+      playCorrect()
       // En práctica, esperar a que el usuario haga click en "Siguiente" para avanzar
       if (mode !== 'practice') {
         nextRef.current = setTimeout(advanceToNext, 400)
@@ -2348,6 +2434,7 @@ export default function App() {
       setDests(computeDests(chessRef.current))
       setMoveIdx(nextMoveIdx + 1)
       setFeedback('idle')
+      playMove()
     }, 300)
   }, [mode, feedback, puzzle, loading, solving, moveIdx, currentFen, advanceToNext, timerStarted])
 
@@ -2356,6 +2443,7 @@ export default function App() {
     setTimeLeft(minutes*60); setPuzzleCount(0); setTimerStarted(false)
     setScoreOk(0); setScoreErr(0); setFeedback('idle'); setHistory([])
     setAttempts(0); setStreakBreaker(null); setHintLevel(0); setSolving(false)
+    warnedRef.current = false
     seenIds.current = []
     sessionStart.current = new Date().toISOString()
     setScreen('storm')
@@ -2473,6 +2561,17 @@ export default function App() {
     setAppState('dashboard'); setScreen('storm')
   }, [])
 
+  // Click en una sección del nav: si es Entrenar, siempre volvemos al config
+  // (incluso desde el dashboard o coming-soon). Para Pájaro Carpintero / Análisis
+  // solo cambiamos la sección.
+  const handleSection = useCallback((s: Section) => {
+    if (s === 'train') {
+      clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
+      setAppState('config'); setScreen('storm')
+    }
+    setSection(s)
+  }, [])
+
   const logout = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
     await signOut()
@@ -2561,7 +2660,7 @@ export default function App() {
   // del módulo correspondiente (con nav expandido).
   if (section !== 'train') {
     return (
-      <NavLayout section={section} onSection={setSection} variant="expanded" user={authUser ?? undefined} onLogout={logout}>
+      <NavLayout section={section} onSection={handleSection} variant="expanded" user={authUser ?? undefined} onLogout={logout}>
         <ComingSoonScreen section={section} />
       </NavLayout>
     )
@@ -2629,7 +2728,7 @@ export default function App() {
   }
 
   return (
-    <NavLayout section={section} onSection={setSection} variant={navVariant} user={authUser ?? undefined} onLogout={logout}>
+    <NavLayout section={section} onSection={handleSection} variant={navVariant} user={authUser ?? undefined} onLogout={logout}>
       {inner}
     </NavLayout>
   )
