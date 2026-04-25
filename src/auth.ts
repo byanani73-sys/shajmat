@@ -118,11 +118,12 @@ export async function startLichessOAuth(): Promise<void> {
   const challenge = await sha256Base64Url(verifier)
   sessionStorage.setItem(PKCE_STORAGE_KEY, verifier)
 
+  // Sin scope: solo accedemos a /api/account (info pública del usuario).
+  // Si en el futuro necesitamos email u otros datos, agregar el scope mínimo necesario.
   const params = new URLSearchParams({
     response_type:         'code',
     client_id:             LICHESS_CLIENT_ID,
     redirect_uri:          getLichessRedirect(),
-    scope:                 'email:read',
     code_challenge_method: 'S256',
     code_challenge:        challenge,
     state:                 generateRandomString(16),

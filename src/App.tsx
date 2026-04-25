@@ -188,7 +188,7 @@ function LoginScreen({ onGuest }: { onGuest:()=>void }) {
 
   const handleEmailSignup = async () => {
     if (!email || !password) { setError('Completá todos los campos'); return }
-    if (password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return }
+    if (password.length < 8) { setError('La contraseña debe tener al menos 8 caracteres'); return }
     setLoading('email'); setError(null)
     try {
       await signUpWithEmail(email, password)
