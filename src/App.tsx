@@ -772,37 +772,70 @@ function DashboardSection({ title, children }: { title: string; children: React.
 }
 
 // ── Activity heatmap (GitHub style) ────────────────────────────────────────
+// Cada columna es una semana (lun→dom). Hoy aparece en la última columna en
+// la fila de su día de la semana real. Días futuros se renderizan vacíos.
 function ActivityHeatmap({ days, activity }: { days: number; activity: Map<string, number> }) {
+  const ms = 24*60*60*1000
   const today = new Date()
   today.setUTCHours(0, 0, 0, 0)
-  const weeks = Math.ceil(days / 7)
-  const cells: Array<{ date: string; count: number }> = []
-  for (let off = days - 1; off >= 0; off--) {
-    const d = new Date(today.getTime() - off * 24*60*60*1000)
-    const dStr = d.toISOString().split('T')[0]
-    cells.push({ date: dStr, count: activity.get(dStr) ?? 0 })
-  }
-  // Reorganizar en columnas (semanas)
-  const cols: Array<typeof cells> = []
-  for (let i = 0; i < weeks; i++) cols.push(cells.slice(i*7, (i+1)*7))
+  const weeksToShow = Math.ceil(days / 7)
 
-  const colorFor = (n: number) => {
-    if (n === 0) return 'rgba(255,255,255,0.04)'
-    if (n === 1) return 'rgba(193,127,42,0.35)'
-    if (n === 2) return 'rgba(193,127,42,0.6)'
-    if (n === 3) return 'rgba(193,127,42,0.85)'
+  // Lunes de la semana actual: hoy menos (días desde lunes)
+  const todayDow = today.getUTCDay()              // 0=Dom .. 6=Sab
+  const daysFromMonday = (todayDow + 6) % 7       // 0=Lun .. 6=Dom
+  const thisMonday  = new Date(today.getTime() - daysFromMonday * ms)
+  const firstMonday = new Date(thisMonday.getTime() - (weeksToShow - 1) * 7 * ms)
+
+  const cols: Array<Array<{ date: string; count: number; future: boolean }>> = []
+  for (let w = 0; w < weeksToShow; w++) {
+    const col: Array<{ date: string; count: number; future: boolean }> = []
+    for (let d = 0; d < 7; d++) {
+      const date  = new Date(firstMonday.getTime() + (w * 7 + d) * ms)
+      const dStr  = date.toISOString().split('T')[0]
+      const future = date.getTime() > today.getTime()
+      col.push({ date: dStr, count: activity.get(dStr) ?? 0, future })
+    }
+    cols.push(col)
+  }
+
+  // Tamaño de celda según densidad — cuanta más semana, más chico
+  const cellSize = weeksToShow <= 6 ? 22 : weeksToShow <= 14 ? 16 : weeksToShow <= 28 ? 13 : 10
+  const gap = weeksToShow <= 14 ? 4 : 3
+
+  const colorFor = (n: number, future: boolean) => {
+    if (future)   return 'transparent'
+    if (n === 0)  return 'rgba(255,255,255,0.04)'
+    if (n === 1)  return 'rgba(193,127,42,0.35)'
+    if (n === 2)  return 'rgba(193,127,42,0.6)'
+    if (n === 3)  return 'rgba(193,127,42,0.85)'
     return C.amber
   }
 
+  // Etiquetas de día en español: solo mostramos Lun, Mié, Vie para no llenar
+  const dowLabels = ['Lun', '', 'Mié', '', 'Vie', '', '']
+
   return (
-    <div style={{ overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
-      <div style={{ display:'inline-flex', gap:3 }}>
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'18px 20px', overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
+      <div style={{ display:'inline-flex', gap:8, alignItems:'flex-start' }}>
+        {/* Etiquetas de día de la semana */}
+        <div style={{ display:'flex', flexDirection:'column', gap }}>
+          {dowLabels.map((l, i) => (
+            <div key={i} style={{
+              ...mono, fontSize:9, color:C.muted, letterSpacing:0.5,
+              height: cellSize, lineHeight: `${cellSize}px`, width: 22,
+            }}>{l}</div>
+          ))}
+        </div>
+        {/* Columnas de semanas */}
         {cols.map((col, i) => (
-          <div key={i} style={{ display:'flex', flexDirection:'column', gap:3 }}>
+          <div key={i} style={{ display:'flex', flexDirection:'column', gap }}>
             {col.map(c => (
               <div key={c.date}
-                title={`${c.date} · ${c.count} sesion${c.count !== 1 ? 'es' : ''}`}
-                style={{ width:11, height:11, borderRadius:2, background: colorFor(c.count) }}
+                title={c.future ? '' : `${c.date} · ${c.count} sesion${c.count !== 1 ? 'es' : ''}`}
+                style={{
+                  width: cellSize, height: cellSize, borderRadius: cellSize >= 14 ? 3 : 2,
+                  background: colorFor(c.count, c.future),
+                }}
               />
             ))}
           </div>
