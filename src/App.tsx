@@ -21,7 +21,7 @@ import { runOfflineSync, installOnlineSyncListener } from './offlineSync'
 import { flushPendingSessions, installOnlineOutboxListener } from './offlineOutbox'
 import { queuePendingSession } from './offlineDb'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
-import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, type ThemeOption } from './themes'
+import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, translateTheme, type ThemeOption } from './themes'
 
 function useIsDesktop() {
   const [desktop, setDesktop] = useState(() => window.innerWidth >= 768)
@@ -648,24 +648,34 @@ function DashboardScreen({
 
           {/* 2. Racha */}
           <DashboardSection title="Racha">
-            <div style={{ display:'flex', alignItems:'center', gap:24, flexWrap:'wrap' }}>
-              <div>
-                <div style={{ ...cinzel, fontSize:36, fontWeight:700, color:C.amber, lineHeight:1 }}>
-                  {streak?.current ?? 0}
+            <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:16 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:32, flexWrap:'wrap' }}>
+                <div>
+                  <div style={{ ...cinzel, fontSize:48, fontWeight:700, color:C.amber, lineHeight:1 }}>
+                    {streak?.current ?? 0}
+                  </div>
+                  <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:6, textTransform:'uppercase' }}>
+                    Días seguidos
+                  </div>
                 </div>
-                <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:4, textTransform:'uppercase' }}>
-                  Días seguidos
+                <div style={{ width:1, height:48, background:'rgba(255,255,255,0.08)' }} />
+                <div>
+                  <div style={{ ...cinzel, fontSize:32, fontWeight:600, color:C.muted, lineHeight:1 }}>
+                    {streak?.longest ?? 0}
+                  </div>
+                  <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:6, textTransform:'uppercase' }}>
+                    Mejor racha
+                  </div>
                 </div>
               </div>
-              <div style={{ height:36, width:1, background:C.border }} />
-              <div>
-                <div style={{ ...mono, fontSize:24, fontWeight:600, color:C.text, lineHeight:1 }}>
-                  {streak?.longest ?? 0}
-                </div>
-                <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:4, textTransform:'uppercase' }}>
-                  Mejor racha
-                </div>
-              </div>
+              {streak?.lastSessionAt && (
+                <>
+                  <div style={{ height:1, background:'rgba(255,255,255,0.06)', margin:'14px 0' }} />
+                  <div style={{ ...mono, fontSize:11, color:C.muted, letterSpacing:0.5 }}>
+                    Última sesión: {fmtRelativeDate(streak.lastSessionAt)}
+                  </div>
+                </>
+              )}
             </div>
           </DashboardSection>
 
@@ -687,12 +697,12 @@ function DashboardScreen({
             </div>
           </DashboardSection>
 
-          {/* 4. Progreso de score */}
+          {/* 4. Progreso de score (solo Storm y Streak — Práctica no es competitivo) */}
           <DashboardSection title="Progreso">
             <div style={{ display:'flex', gap:6, marginBottom:14, flexWrap:'wrap' }}>
-              {(['storm','streak','practice'] as Mode[]).map(m => {
+              {(['storm','streak'] as Mode[]).map(m => {
                 const sel = scoreMode === m
-                const lbl = m === 'storm' ? 'Storm' : m === 'streak' ? 'Streak' : 'Práctica'
+                const lbl = m === 'storm' ? 'Storm' : 'Streak'
                 return (
                   <button key={m} onClick={() => setScoreMode(m)}
                     style={{
@@ -710,10 +720,10 @@ function DashboardScreen({
                 background:C.surface, border:`1px solid ${C.border}`, borderRadius:12,
                 padding:'24px 20px', textAlign:'center', color:C.muted, fontSize:12, lineHeight:1.5,
               }}>
-                Completá {Math.max(0, 5 - weekly.length)} sesiones más de {scoreMode === 'storm' ? 'Storm' : scoreMode === 'streak' ? 'Streak' : 'Práctica'} para ver tu curva de progreso.
+                Completá {Math.max(0, 5 - weekly.length)} sesiones más de {scoreMode === 'storm' ? 'Storm' : 'Streak'} para ver tu curva de progreso.
               </div>
             ) : (
-              <ScoreChart weekly={weekly} mode={scoreMode} />
+              <ScoreChart weekly={weekly} />
             )}
           </DashboardSection>
 
@@ -771,99 +781,114 @@ function DashboardSection({ title, children }: { title: string; children: React.
   )
 }
 
-// ── Activity heatmap (GitHub style) ────────────────────────────────────────
-// Cada columna es una semana (lun→dom). Hoy aparece en la última columna en
-// la fila de su día de la semana real. Días futuros se renderizan vacíos.
+// ── Activity heatmap ───────────────────────────────────────────────────────
+// CSS grid: columnas = semanas (auto-flow), filas = días (Lun→Dom).
+// Las celdas escalan a fr para llenar el ancho del card.
 function ActivityHeatmap({ days, activity }: { days: number; activity: Map<string, number> }) {
   const ms = 24*60*60*1000
   const today = new Date()
   today.setUTCHours(0, 0, 0, 0)
-  const weeksToShow = Math.ceil(days / 7)
+  const weeksToShow = Math.max(1, Math.ceil(days / 7))
 
-  // Lunes de la semana actual: hoy menos (días desde lunes)
+  // Lunes de la semana actual = hoy menos (días desde lunes)
   const todayDow = today.getUTCDay()              // 0=Dom .. 6=Sab
   const daysFromMonday = (todayDow + 6) % 7       // 0=Lun .. 6=Dom
   const thisMonday  = new Date(today.getTime() - daysFromMonday * ms)
   const firstMonday = new Date(thisMonday.getTime() - (weeksToShow - 1) * 7 * ms)
 
-  const cols: Array<Array<{ date: string; count: number; future: boolean }>> = []
+  // Generar todas las celdas en orden COLUMNAR (recorre columna por columna)
+  // para que con grid-auto-flow: column queden alineadas correctamente.
+  const cells: Array<{ date: string; count: number; future: boolean }> = []
   for (let w = 0; w < weeksToShow; w++) {
-    const col: Array<{ date: string; count: number; future: boolean }> = []
     for (let d = 0; d < 7; d++) {
-      const date  = new Date(firstMonday.getTime() + (w * 7 + d) * ms)
-      const dStr  = date.toISOString().split('T')[0]
+      const date   = new Date(firstMonday.getTime() + (w * 7 + d) * ms)
+      const dStr   = date.toISOString().split('T')[0]
       const future = date.getTime() > today.getTime()
-      col.push({ date: dStr, count: activity.get(dStr) ?? 0, future })
+      cells.push({ date: dStr, count: activity.get(dStr) ?? 0, future })
     }
-    cols.push(col)
   }
-
-  // Tamaño de celda según densidad — cuanta más semana, más chico
-  const cellSize = weeksToShow <= 6 ? 22 : weeksToShow <= 14 ? 16 : weeksToShow <= 28 ? 13 : 10
-  const gap = weeksToShow <= 14 ? 4 : 3
 
   const colorFor = (n: number, future: boolean) => {
     if (future)   return 'transparent'
-    if (n === 0)  return 'rgba(255,255,255,0.04)'
+    if (n === 0)  return 'rgba(255,255,255,0.05)'
     if (n === 1)  return 'rgba(193,127,42,0.35)'
     if (n === 2)  return 'rgba(193,127,42,0.6)'
     if (n === 3)  return 'rgba(193,127,42,0.85)'
     return C.amber
   }
 
-  // Etiquetas de día en español: solo mostramos Lun, Mié, Vie para no llenar
-  const dowLabels = ['Lun', '', 'Mié', '', 'Vie', '', '']
+  // Labels: Lun, _, Mié, _, Vie, _, Dom (impares + extremos)
+  const dowLabels = ['Lun', '', 'Mié', '', 'Vie', '', 'Dom']
 
   return (
-    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'18px 20px', overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
-      <div style={{ display:'inline-flex', gap:8, alignItems:'flex-start' }}>
-        {/* Etiquetas de día de la semana */}
-        <div style={{ display:'flex', flexDirection:'column', gap }}>
-          {dowLabels.map((l, i) => (
-            <div key={i} style={{
-              ...mono, fontSize:9, color:C.muted, letterSpacing:0.5,
-              height: cellSize, lineHeight: `${cellSize}px`, width: 22,
-            }}>{l}</div>
-          ))}
-        </div>
-        {/* Columnas de semanas */}
-        {cols.map((col, i) => (
-          <div key={i} style={{ display:'flex', flexDirection:'column', gap }}>
-            {col.map(c => (
-              <div key={c.date}
-                title={c.future ? '' : `${c.date} · ${c.count} sesion${c.count !== 1 ? 'es' : ''}`}
-                style={{
-                  width: cellSize, height: cellSize, borderRadius: cellSize >= 14 ? 3 : 2,
-                  background: colorFor(c.count, c.future),
-                }}
-              />
-            ))}
-          </div>
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:16, display:'flex', gap:8, alignItems:'stretch' }}>
+      {/* Etiquetas de día de la semana */}
+      <div style={{
+        display:'grid', gridTemplateRows:'repeat(7, 1fr)', gap:3,
+        ...mono, fontSize:9, color:C.muted, letterSpacing:0.5,
+      }}>
+        {dowLabels.map((l, i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', minHeight:12 }}>{l}</div>
+        ))}
+      </div>
+      {/* Grid de celdas: 7 filas × N columnas, cada columna toma 1fr del ancho */}
+      <div style={{
+        flex:1, minWidth:0,
+        display:'grid',
+        gridAutoFlow:'column',
+        gridTemplateRows:'repeat(7, 1fr)',
+        gridAutoColumns:'1fr',
+        gap:3,
+      }}>
+        {cells.map(c => (
+          <div key={c.date}
+            title={c.future ? '' : `${c.date} · ${c.count} sesion${c.count !== 1 ? 'es' : ''}`}
+            style={{
+              minHeight:12, borderRadius:2, background: colorFor(c.count, c.future),
+            }}
+          />
         ))}
       </div>
     </div>
   )
 }
 
-// ── Score chart (gráfico de barras simple) ─────────────────────────────────
-function ScoreChart({ weekly, mode }: { weekly: WeeklyScore[]; mode: Mode }) {
-  const max = Math.max(...weekly.map(w => w.avg_score), 1)
-  const label = mode === 'streak' ? 'Racha máxima promedio' : 'Score promedio'
+// ── Score chart — mejor score por semana ────────────────────────────────────
+// Cada barra muestra su valor numérico encima. La última barra con datos se
+// destaca en ámbar pleno; las demás en ámbar atenuado.
+function ScoreChart({ weekly }: { weekly: WeeklyScore[] }) {
+  const max = Math.max(...weekly.map(w => w.best_score), 1)
+  // Encontrar índice de la última semana con score > 0 (la más reciente con datos reales)
+  let lastWithData = -1
+  for (let i = weekly.length - 1; i >= 0; i--) {
+    if (weekly[i].best_score > 0) { lastWithData = i; break }
+  }
+
   return (
-    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'18px 16px' }}>
-      <div style={{ display:'flex', alignItems:'flex-end', gap:6, height:140 }}>
-        {weekly.map(w => {
-          const h = (w.avg_score / max) * 100
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:16 }}>
+      <div style={{ display:'flex', alignItems:'flex-end', gap:6, height:160 }}>
+        {weekly.map((w, i) => {
+          const h    = (w.best_score / max) * 100
+          const last = i === lastWithData
+          const has  = w.best_score > 0
           return (
-            <div key={w.week} title={`${w.week} · ${w.avg_score.toFixed(1)} (${w.count} sesiones)`}
+            <div key={w.week} title={`${w.week} · mejor ${w.best_score} (${w.count} sesion${w.count !== 1 ? 'es' : ''})`}
               style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'flex-end', alignItems:'center', minWidth:0 }}>
-              <div style={{ width:'100%', maxWidth:32, height:`${h}%`, background:C.amber, borderRadius:'3px 3px 0 0', minHeight:2, transition:'height .2s' }} />
+              <div style={{ ...mono, fontSize:9, color:'rgba(247,244,239,0.5)', marginBottom:4, height:11 }}>
+                {has ? w.best_score : ''}
+              </div>
+              <div style={{
+                width:'100%', maxWidth:32,
+                height: has ? `${h}%` : 0, minHeight: has ? 2 : 0,
+                background: last ? C.amber : 'rgba(193,127,42,0.3)',
+                borderRadius:'3px 3px 0 0', transition:'height .2s',
+              }} />
             </div>
           )
         })}
       </div>
       <div style={{ ...mono, fontSize:9, letterSpacing:1, color:C.muted, marginTop:10, textAlign:'center' }}>
-        {label} · {weekly.length} semana{weekly.length !== 1 ? 's' : ''}
+        Mejor score por semana · {weekly.length} semana{weekly.length !== 1 ? 's' : ''}
       </div>
     </div>
   )
@@ -879,7 +904,7 @@ function ThemeBreakdown({ themes }: { themes: ThemeStats[] }) {
   const Bar = ({ label, accuracy, color }: { label: string; accuracy: number; color: string }) => (
     <div style={{ marginBottom:10 }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
-        <span style={{ fontSize:13, color:C.text, textTransform:'capitalize' }}>{label}</span>
+        <span style={{ fontSize:13, color:C.text }}>{label}</span>
         <span style={{ ...mono, fontSize:11, color:C.muted, letterSpacing:1 }}>{Math.round(accuracy)}%</span>
       </div>
       <div style={{ height:6, background:C.surface, borderRadius:3, overflow:'hidden' }}>
@@ -892,11 +917,11 @@ function ThemeBreakdown({ themes }: { themes: ThemeStats[] }) {
     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24 }}>
       <div>
         <div style={{ ...mono, fontSize:8, letterSpacing:2, color:C.muted, marginBottom:10, textTransform:'uppercase' }}>Fortalezas</div>
-        {strong.map(t => <Bar key={t.theme} label={t.theme} accuracy={t.accuracy} color={C.correct} />)}
+        {strong.map(t => <Bar key={t.theme} label={translateTheme(t.theme)} accuracy={t.accuracy} color={C.correct} />)}
       </div>
       <div>
         <div style={{ ...mono, fontSize:8, letterSpacing:2, color:C.muted, marginBottom:10, textTransform:'uppercase' }}>A mejorar</div>
-        {weak.map(t => <Bar key={t.theme} label={t.theme} accuracy={t.accuracy} color="rgba(224,82,82,0.7)" />)}
+        {weak.map(t => <Bar key={t.theme} label={translateTheme(t.theme)} accuracy={t.accuracy} color="rgba(224,82,82,0.7)" />)}
       </div>
     </div>
   )

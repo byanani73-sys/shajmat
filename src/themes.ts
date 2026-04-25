@@ -31,6 +31,85 @@ export function themeTags(t: ThemeOption): string[] {
   return t.aliases && t.aliases.length > 0 ? [t.id, ...t.aliases] : [t.id]
 }
 
+// ═══ Traducción de temas Lichess al español ════════════════════════════════
+// Diccionario completo. Las entries que también están en THEME_GROUPS abajo
+// quedan duplicadas a propósito — este objeto es el lookup canónico.
+export const THEME_LABELS: Record<string, string> = {
+  // Mates
+  mate:               'Mate',
+  mateIn1:            'Mate en 1',
+  mateIn2:            'Mate en 2',
+  mateIn3:            'Mate en 3',
+  mateIn4:            'Mate en 4',
+  mateIn5:            'Mate en 5',
+  // Patrones de mate
+  anastasiaMate:      'Mate Anastasia',
+  arabianMate:        'Mate árabe',
+  backRankMate:       'Mate en fila de atrás',
+  bodenMate:          'Mate Boden',
+  doubleBishopMate:   'Mate de dos alfiles',
+  dovetailMate:       'Mate cola de golondrina',
+  hookMate:           'Mate gancho',
+  killBoxMate:        'Mate kill box',
+  smotheredMate:      'Mate ahogado',
+  vukovicMate:        'Mate Vukovic',
+  // Tácticas
+  attackingF2F7:      'Ataque a f2/f7',
+  attraction:         'Atracción',
+  capturingDefender:  'Captura del defensor',
+  clearance:          'Despeje',
+  defensiveMove:      'Jugada defensiva',
+  deflection:         'Desvío',
+  discoveredAttack:   'Ataque descubierto',
+  doubleCheck:        'Jaque doble',
+  enPassant:          'En passant',
+  exposedKing:        'Rey expuesto',
+  fork:               'Horquilla',
+  hangingPiece:       'Pieza colgada',
+  interference:       'Interferencia',
+  intermezzo:         'Intermedio',
+  pin:                'Clavada',
+  promotion:          'Coronación',
+  quietMove:          'Jugada silenciosa',
+  sacrifice:          'Sacrificio',
+  skewer:             'Ensartada',
+  trappedPiece:       'Pieza atrapada',
+  underPromotion:     'Subpromoción',
+  xRayAttack:         'Ataque de rayos X',
+  zugzwang:           'Zugzwang',
+  // Finales
+  bishopEndgame:      'Final de alfil',
+  knightEndgame:      'Final de caballo',
+  pawnEndgame:        'Final de peones',
+  queenEndgame:       'Final de dama',
+  queenRookEndgame:   'Final dama y torre',
+  rookEndgame:        'Final de torre',
+  // Fases
+  endgame:            'Final',
+  middlegame:         'Medio juego',
+  opening:            'Apertura',
+  // Longitud
+  oneMove:            'Un movimiento',
+  short:              'Corto',
+  long:               'Largo',
+  veryLong:           'Muy largo',
+  // Evaluación
+  advantage:          'Ventaja',
+  crushing:           'Aplastante',
+  equality:           'Igualdad',
+  // Origen del puzzle
+  master:             'Maestro',
+  masterVsMaster:     'Maestro vs maestro',
+  superGM:            'Super GM',
+  advancedPawn:       'Peón avanzado',
+}
+
+/** Traduce una clave de tema de Lichess a su nombre en español.
+ *  Si la clave no está mapeada, devuelve la clave original como fallback. */
+export function translateTheme(key: string): string {
+  return THEME_LABELS[key] ?? key
+}
+
 // ═══ Temas tácticos ════════════════════════════════════════════════════════
 export const THEME_GROUPS: ThemeGroup[] = [
   {

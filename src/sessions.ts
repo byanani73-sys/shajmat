@@ -141,13 +141,13 @@ export async function getDashboardActivity(userId: string, tf: Timeframe): Promi
 }
 
 // ── Racha actual (consecutiva desde hoy) y mejor histórica ─────────────────
-export interface StreakInfo { current: number; longest: number }
+export interface StreakInfo { current: number; longest: number; lastSessionAt: string | null }
 
 export async function getDashboardStreak(userId: string): Promise<StreakInfo> {
   const { data } = await supabase
     .from('sessions').select('started_at').eq('user_id', userId)
     .order('started_at', { ascending: true })
-  if (!data || data.length === 0) return { current: 0, longest: 0 }
+  if (!data || data.length === 0) return { current: 0, longest: 0, lastSessionAt: null }
 
   const days = new Set<string>()
   for (const r of data) days.add((r.started_at as string).split('T')[0])
@@ -176,11 +176,12 @@ export async function getDashboardStreak(userId: string): Promise<StreakInfo> {
     if (days.has(dStr)) current++
     else break
   }
-  return { current, longest }
+  const lastSessionAt = data[data.length - 1].started_at as string
+  return { current, longest, lastSessionAt }
 }
 
-// ── Score promedio por semana (gráfico de barras) ──────────────────────────
-export interface WeeklyScore { week: string; avg_score: number; count: number }
+// ── Mejor score por semana (gráfico de barras) ─────────────────────────────
+export interface WeeklyScore { week: string; best_score: number; count: number }
 
 export async function getWeeklyScores(userId: string, mode: Mode, tf: Timeframe): Promise<WeeklyScore[]> {
   let q = supabase.from('sessions').select('started_at, score_ok')
@@ -189,7 +190,7 @@ export async function getWeeklyScores(userId: string, mode: Mode, tf: Timeframe)
   if (start) q = q.gte('started_at', start)
   const { data } = await q.order('started_at')
 
-  const weeks = new Map<string, { sum: number; count: number }>()
+  const weeks = new Map<string, { best: number; count: number }>()
   for (const r of (data ?? [])) {
     const d = new Date(r.started_at as string)
     const day = d.getUTCDay()
@@ -197,13 +198,13 @@ export async function getWeeklyScores(userId: string, mode: Mode, tf: Timeframe)
     const monday = new Date(d.getTime() + diff * 24*60*60*1000)
     monday.setUTCHours(0, 0, 0, 0)
     const wk = monday.toISOString().split('T')[0]
-    const w = weeks.get(wk) ?? { sum: 0, count: 0 }
-    w.sum += r.score_ok ?? 0
+    const w = weeks.get(wk) ?? { best: 0, count: 0 }
+    if ((r.score_ok ?? 0) > w.best) w.best = r.score_ok ?? 0
     w.count++
     weeks.set(wk, w)
   }
   return [...weeks.entries()]
-    .map(([week, w]) => ({ week, avg_score: w.sum / w.count, count: w.count }))
+    .map(([week, w]) => ({ week, best_score: w.best, count: w.count }))
     .sort((a, b) => a.week.localeCompare(b.week))
 }
 
