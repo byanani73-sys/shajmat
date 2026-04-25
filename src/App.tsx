@@ -9,7 +9,13 @@ import {
   startLichessOAuth, handleLichessCallback, fetchLichessAccount,
   type AuthUser,
 } from './auth'
-import { saveSession, saveSessionErrors, getBestScores, type BestScores, type Mode } from './sessions'
+import {
+  saveSession, saveSessionErrors, getBestScores,
+  getDashboardSummary, getDashboardActivity, getDashboardStreak,
+  getWeeklyScores, getThemeStats, getAllTimeBests,
+  type BestScores, type Mode, type Timeframe as DashboardTimeframe,
+  type DashboardSummary, type StreakInfo, type WeeklyScore, type ThemeStats, type AllTimeBest,
+} from './sessions'
 import { saveFeedback } from './feedback'
 import { runOfflineSync, installOnlineSyncListener } from './offlineSync'
 import { flushPendingSessions, installOnlineOutboxListener } from './offlineOutbox'
@@ -27,7 +33,7 @@ function useIsDesktop() {
   return desktop
 }
 
-type AppState = 'init' | 'login' | 'config' | 'preparing' | 'storm' | 'results' | 'review'
+type AppState = 'init' | 'login' | 'config' | 'preparing' | 'storm' | 'results' | 'review' | 'dashboard'
 type Feedback = 'idle' | 'thinking' | 'correct' | 'wrong'
 interface HistoryEntry extends Puzzle { result: 'ok' | 'err' }
 
@@ -146,6 +152,59 @@ function ModeIcon({ mode, size = 44 }: { mode: Mode; size?: number }) {
   )
 }
 
+// ─── Section nav icons — 4×4 boards con patrones distintivos ────────────────
+type Section = 'train' | 'woodpecker' | 'analysis'
+
+function NavIcon({ section, size = 36 }: { section: Section; size?: number }) {
+  const cellSize = 8.5
+  const gap = 2
+  const baseDim    = 'rgba(247,244,239,0.05)'
+  const baseBright = 'rgba(247,244,239,0.10)'
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40">
+      {Array.from({ length: 16 }, (_, i) => {
+        const r = Math.floor(i / 4)
+        const c = i % 4
+        let fill = baseDim
+
+        if (section === 'train') {
+          fill = baseBright
+          if (r === 1 && c === 1) fill = C.amber  // un solo cuadrado ámbar
+        }
+
+        if (section === 'woodpecker') {
+          // Dos columnas (col0 y col2) que se intensifican de arriba hacia abajo
+          if (c === 0 || c === 2) {
+            const stops = ['rgba(193,127,42,0.20)','rgba(193,127,42,0.40)','rgba(193,127,42,0.65)', C.amber]
+            fill = stops[r]
+          }
+        }
+
+        if (section === 'analysis') {
+          const reds: Record<string, string> = {
+            '0-0': 'rgba(224,82,82,0.5)',
+            '0-3': 'rgba(224,82,82,0.3)',
+            '1-2': 'rgba(224,82,82,0.6)',
+            '2-1': 'rgba(224,82,82,0.35)',
+            '3-2': 'rgba(224,82,82,0.5)',
+          }
+          fill = reds[`${r}-${c}`] ?? baseDim
+        }
+
+        return (
+          <rect key={i}
+            x={c * (cellSize + gap)}
+            y={r * (cellSize + gap)}
+            width={cellSize} height={cellSize}
+            rx={1.5} fill={fill}
+          />
+        )
+      })}
+    </svg>
+  )
+}
+
 // ─── Easter egg Shin ──────────────────────────────────────────────────────────
 function EasterShin() {
   return (
@@ -162,6 +221,652 @@ function Spinner() {
     <div style={{ width:16, height:16, border:`2px solid ${C.surface2}`, borderTopColor:C.amber, borderRadius:'50%', animation:'spin .7s linear infinite', flexShrink:0 }} />
     <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
   </>
+}
+
+// ══ Navegación: Sidebar (desktop), BottomNav (mobile), NavLayout ══════════════
+
+const SECTIONS: { id: Section; label: string; group: 'train' | 'tools' }[] = [
+  { id: 'train',      label: 'Entrenar',           group: 'train' },
+  { id: 'woodpecker', label: 'Pájaro Carpintero',  group: 'tools' },
+  { id: 'analysis',   label: 'Análisis de partidas', group: 'tools' },
+]
+
+const SECTION_DESCRIPTIONS: Record<Section, string> = {
+  train:      '',
+  woodpecker: 'Repetición espaciada de tus puzzles más difíciles. Inspirado en el método del Pájaro Carpintero.',
+  analysis:   'Análisis de tus partidas de lichess y detección de tus patrones de error',
+}
+
+// Avatar circular con inicial del usuario.
+function UserAvatar({ user, size = 32 }: { user?: AuthUser; size?: number }) {
+  const initial = (user?.username ?? user?.email ?? '?').charAt(0).toUpperCase()
+  return (
+    <div style={{
+      width:size, height:size, borderRadius:'50%',
+      background:C.amberBg, border:`1px solid ${C.borderAm}`,
+      display:'flex', alignItems:'center', justifyContent:'center',
+      ...cinzel, fontSize:Math.round(size*0.45), fontWeight:700, color:C.amber,
+      flexShrink:0,
+    }}>{initial}</div>
+  )
+}
+
+// Sidebar desktop: expanded (220px) o collapsed (56px).
+function Sidebar({
+  section, onSection, collapsed, user, onLogout,
+}: {
+  section:Section; onSection:(s:Section)=>void; collapsed:boolean
+  user?:AuthUser; onLogout:()=>void
+}) {
+  const eloFmtLabel = user?.lichessEloFormat
+    ? user.lichessEloFormat.charAt(0).toUpperCase() + user.lichessEloFormat.slice(1)
+    : null
+  const trainItems = SECTIONS.filter(s => s.group === 'train')
+  const toolsItems = SECTIONS.filter(s => s.group === 'tools')
+
+  return (
+    <aside style={{
+      width: collapsed ? 56 : 220, flexShrink:0,
+      background:C.surface, borderRight:`1px solid ${C.border}`,
+      display:'flex', flexDirection:'column',
+      padding: collapsed ? '16px 8px' : '20px 16px',
+      gap:18, minHeight:'100vh', boxSizing:'border-box',
+    }}>
+      {/* Logo */}
+      <div style={{ display:'flex', alignItems:'center', gap:10, justifyContent: collapsed ? 'center' : 'flex-start' }}>
+        <ShajmatMark size={collapsed ? 28 : 28} />
+        {!collapsed && (
+          <div style={{ ...cinzel, fontSize:16, fontWeight:700, letterSpacing:3, color:C.text }}>SHAJMAT</div>
+        )}
+      </div>
+
+      {/* Grupo Entrenar */}
+      <div>
+        {!collapsed && (
+          <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginBottom:8, paddingLeft:6 }}>Entrenar</div>
+        )}
+        {trainItems.map(it => (
+          <SidebarItem key={it.id} item={it} active={section===it.id} collapsed={collapsed} onClick={() => onSection(it.id)} />
+        ))}
+      </div>
+
+      {/* Grupo Herramientas */}
+      <div>
+        {!collapsed && (
+          <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginBottom:8, paddingLeft:6 }}>Herramientas</div>
+        )}
+        {toolsItems.map(it => (
+          <SidebarItem key={it.id} item={it} active={section===it.id} collapsed={collapsed} pending onClick={() => onSection(it.id)} />
+        ))}
+      </div>
+
+      {/* Footer: avatar + user info + logout */}
+      <div style={{ flex:1 }} />
+      {user && (
+        <div style={{
+          display:'flex', alignItems:'center', gap:10,
+          padding: collapsed ? 0 : '10px 8px', borderTop:`1px solid ${C.border}`,
+          paddingTop:14, justifyContent: collapsed ? 'center' : 'flex-start',
+        }}>
+          <UserAvatar user={user} size={collapsed ? 28 : 32} />
+          {!collapsed && (
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:12, fontWeight:600, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {user.username ?? user.email?.split('@')[0]}
+              </div>
+              {user.lichessElo && eloFmtLabel && (
+                <div style={{ ...mono, fontSize:9, color:C.muted, marginTop:2 }}>
+                  ELO {eloFmtLabel} · {user.lichessElo}
+                </div>
+              )}
+            </div>
+          )}
+          {!collapsed && (
+            <button onClick={onLogout} title="Salir"
+              style={{ background:'none', border:'none', color:C.muted, cursor:'pointer', padding:6, fontSize:14 }}>
+              ⎋
+            </button>
+          )}
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function SidebarItem({
+  item, active, collapsed, pending, onClick,
+}: {
+  item: { id: Section; label: string }
+  active: boolean; collapsed: boolean; pending?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button onClick={onClick}
+      title={collapsed ? item.label : undefined}
+      style={{
+        width:'100%', display:'flex', alignItems:'center', gap:10,
+        padding: collapsed ? '10px 0' : '10px 8px',
+        justifyContent: collapsed ? 'center' : 'flex-start',
+        background: active ? 'rgba(193,127,42,0.10)' : 'transparent',
+        border:'none', borderRadius:8, cursor:'pointer',
+        color: active ? C.amber : 'rgba(247,244,239,0.5)',
+        fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:500,
+        transition:'background .15s', position:'relative',
+      }}>
+      <div style={{ position:'relative', display:'inline-block', lineHeight:0 }}>
+        <NavIcon section={item.id} size={28} />
+        {pending && (
+          <span style={{
+            position:'absolute', top:-2, right:-2,
+            width:6, height:6, borderRadius:'50%',
+            background:'rgba(255,255,255,0.15)',
+          }}/>
+        )}
+      </div>
+      {!collapsed && (
+        <span style={{ flex:1, textAlign:'left', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+          {item.label}
+        </span>
+      )}
+      {!collapsed && pending && (
+        <span style={{ ...mono, fontSize:8, letterSpacing:1, color:C.muted, padding:'2px 6px', background:'rgba(255,255,255,0.05)', borderRadius:4 }}>
+          PRONTO
+        </span>
+      )}
+    </button>
+  )
+}
+
+// Bottom nav mobile: 3 items con label
+function BottomNav({ section, onSection }: { section:Section; onSection:(s:Section)=>void }) {
+  return (
+    <nav style={{
+      position:'fixed', left:0, right:0, bottom:0, zIndex:50,
+      background:C.surface, borderTop:`1px solid ${C.border}`,
+      display:'flex', justifyContent:'space-around', alignItems:'center',
+      padding:'6px 8px 10px', boxSizing:'border-box',
+    }}>
+      {SECTIONS.map(s => {
+        const active  = section === s.id
+        const pending = s.group === 'tools'
+        return (
+          <button key={s.id} onClick={() => onSection(s.id)}
+            style={{
+              flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:2,
+              background:'transparent', border:'none', cursor:'pointer',
+              padding:'4px 0',
+            }}>
+            <div style={{
+              position:'relative', padding:6, borderRadius:8,
+              background: active ? 'rgba(193,127,42,0.12)' : 'transparent',
+              transition:'background .15s', lineHeight:0,
+            }}>
+              <NavIcon section={s.id} size={26} />
+              {pending && (
+                <span style={{
+                  position:'absolute', top:2, right:2,
+                  width:5, height:5, borderRadius:'50%',
+                  background:'rgba(255,255,255,0.15)',
+                }}/>
+              )}
+            </div>
+            <span style={{
+              ...mono, fontSize:8, letterSpacing:1,
+              color: active ? C.amber : 'rgba(247,244,239,0.3)',
+              textTransform:'uppercase', textAlign:'center',
+            }}>
+              {s.id === 'train' ? 'Entrenar' : s.id === 'woodpecker' ? 'Carpintero' : 'Análisis'}
+            </span>
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+// NavLayout: wrapper que decide sidebar/bottom nav según viewport y variant.
+//
+// Desktop:
+//   expanded  → sidebar 220px
+//   collapsed → sidebar 56px (durante el juego)
+//   hidden    → sin nav
+// Mobile:
+//   expanded  → bottom nav fijo abajo
+//   collapsed → bottom nav OCULTO (durante el juego, para maximizar el área de juego)
+//   hidden    → sin nav
+function NavLayout({
+  section, onSection, variant, user, onLogout, children,
+}: {
+  section:Section; onSection:(s:Section)=>void
+  variant:'expanded'|'collapsed'|'hidden'
+  user?:AuthUser; onLogout:()=>void
+  children: React.ReactNode
+}) {
+  const desktop = useIsDesktop()
+  if (variant === 'hidden') return <>{children}</>
+  if (desktop) {
+    return (
+      <div style={{ display:'flex', minHeight:'100vh', background:C.bg }}>
+        <Sidebar section={section} onSection={onSection} collapsed={variant==='collapsed'} user={user} onLogout={onLogout} />
+        <div style={{ flex:1, minWidth:0 }}>{children}</div>
+      </div>
+    )
+  }
+  // Mobile: bottom nav solo cuando expanded (no durante el juego)
+  const showBottom = variant === 'expanded'
+  return (
+    <div style={{ minHeight:'100vh', background:C.bg, paddingBottom: showBottom ? 72 : 0 }}>
+      {children}
+      {showBottom && <BottomNav section={section} onSection={onSection} />}
+    </div>
+  )
+}
+
+// Pantalla genérica "Próximamente" para Pájaro Carpintero y Análisis
+function ComingSoonScreen({ section }: { section: Section }) {
+  const title = section === 'woodpecker' ? 'Pájaro Carpintero' : 'Análisis de partidas'
+  const desc  = SECTION_DESCRIPTIONS[section]
+  return (
+    <div style={{
+      minHeight:'100vh', display:'flex', flexDirection:'column',
+      alignItems:'center', justifyContent:'center', padding:'40px 24px',
+      fontFamily:"'DM Sans',system-ui,sans-serif",
+    }}>
+      <div style={{ maxWidth:360, textAlign:'center' }}>
+        <div style={{ marginBottom:18, display:'flex', justifyContent:'center' }}>
+          <NavIcon section={section} size={72} />
+        </div>
+        <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.amber, marginBottom:8 }}>
+          Próximamente
+        </div>
+        <h1 style={{ ...cinzel, fontSize:28, fontWeight:700, color:C.text, margin:'0 0 16px', letterSpacing:1 }}>
+          {title}
+        </h1>
+        <p style={{ fontSize:14, color:C.muted, lineHeight:1.6, margin:0 }}>{desc}</p>
+      </div>
+    </div>
+  )
+}
+
+// ══ Dashboard ═════════════════════════════════════════════════════════════════
+//
+// Pantalla de progreso del usuario. Solo se muestra a usuarios autenticados;
+// para guests se muestra un overlay invitando a crear cuenta.
+// El selector de timeframe arriba (1M/3M/6M/1A/Todo) afecta a todas las
+// secciones excepto "Mejores scores" (que es always-time).
+
+const TF_OPTIONS: { id: DashboardTimeframe; label: string }[] = [
+  { id: '1m',  label: '1M' },
+  { id: '3m',  label: '3M' },
+  { id: '6m',  label: '6M' },
+  { id: '1y',  label: '1A' },
+  { id: 'all', label: 'Todo' },
+]
+
+function fmtRelativeDate(iso: string | null): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  const days = Math.floor(ms / (24*60*60*1000))
+  if (days < 1)  return 'hoy'
+  if (days < 2)  return 'ayer'
+  if (days < 7)  return 'esta semana'
+  if (days < 14) return 'la semana pasada'
+  if (days < 30) return `hace ${Math.floor(days/7)} semanas`
+  if (days < 60) return 'el mes pasado'
+  return `hace ${Math.floor(days/30)} meses`
+}
+
+function DashboardScreen({
+  user, isGuest, onBack, onGoLogin,
+}: {
+  user?: AuthUser; isGuest: boolean
+  onBack: () => void
+  onGoLogin: () => void
+}) {
+  const desktop = useIsDesktop()
+  const [tf, setTf] = useState<DashboardTimeframe>('1m')
+  const [scoreMode, setScoreMode] = useState<Mode>('storm')
+
+  const [summary,  setSummary]  = useState<DashboardSummary | null>(null)
+  const [streak,   setStreak]   = useState<StreakInfo | null>(null)
+  const [activity, setActivity] = useState<Map<string, number>>(new Map())
+  const [weekly,   setWeekly]   = useState<WeeklyScore[]>([])
+  const [themes,   setThemes]   = useState<ThemeStats[]>([])
+  const [bests,    setBests]    = useState<AllTimeBest[]>([])
+  const [loading,  setLoading]  = useState(true)
+
+  useEffect(() => {
+    if (!user || isGuest) { setLoading(false); return }
+    let cancelled = false
+    setLoading(true)
+    Promise.all([
+      getDashboardSummary(user.id, tf),
+      getDashboardStreak(user.id),
+      getDashboardActivity(user.id, tf),
+      getThemeStats(user.id, tf),
+      getAllTimeBests(user.id),
+    ]).then(([s, st, act, th, b]) => {
+      if (cancelled) return
+      setSummary(s); setStreak(st); setActivity(act); setThemes(th); setBests(b)
+      setLoading(false)
+    }).catch(e => { console.error('dashboard:', e); if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [user?.id, isGuest, tf])
+
+  // Score por semana — depende del modo seleccionado adicionalmente
+  useEffect(() => {
+    if (!user || isGuest) return
+    let cancelled = false
+    getWeeklyScores(user.id, scoreMode, tf).then(w => { if (!cancelled) setWeekly(w) })
+    return () => { cancelled = true }
+  }, [user?.id, isGuest, tf, scoreMode])
+
+  // Heatmap de actividad: cuántas semanas mostrar según timeframe
+  const weeksToShow = tf === '1m' ? 5 : tf === '3m' ? 13 : tf === '6m' ? 26 : tf === '1y' ? 52 : 13
+  const heatmapDays = weeksToShow * 7
+
+  return (
+    <div style={{
+      minHeight:'100vh', background:C.bg,
+      padding: desktop ? '32px 40px' : '20px 16px',
+      fontFamily:"'DM Sans',system-ui,sans-serif",
+      position:'relative',
+    }}>
+      <div style={{ maxWidth:840, margin:'0 auto' }}>
+        {/* Header con back */}
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:24 }}>
+          <button onClick={onBack}
+            style={{ ...mono, fontSize:11, color:C.muted, background:'none', border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 12px', cursor:'pointer', letterSpacing:1 }}>
+            ← Volver
+          </button>
+          <h1 style={{ ...cinzel, fontSize:22, fontWeight:700, color:C.text, margin:0, letterSpacing:2 }}>Mi progreso</h1>
+        </div>
+
+        {/* Timeframe selector */}
+        <div style={{ display:'flex', gap:6, marginBottom:24, flexWrap:'wrap' }}>
+          {TF_OPTIONS.map(o => {
+            const sel = tf === o.id
+            return (
+              <button key={o.id} onClick={() => setTf(o.id)}
+                style={{
+                  ...mono, fontSize:11, fontWeight:600, letterSpacing:1,
+                  padding:'6px 14px', borderRadius:18,
+                  border:`1px solid ${sel ? C.amber : C.border}`,
+                  background: sel ? C.amberBg : C.surface,
+                  color: sel ? C.amber : C.muted,
+                  cursor:'pointer', transition:'all .15s',
+                }}>
+                {o.label}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Guest overlay */}
+        {(!user || isGuest) && (
+          <div style={{
+            position:'relative', border:`1px solid ${C.border}`, background:C.surface,
+            borderRadius:14, padding:'40px 24px', textAlign:'center',
+          }}>
+            <div style={{ fontSize:15, color:C.text, marginBottom:14, fontWeight:500 }}>
+              Creá una cuenta para ver tu progreso
+            </div>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:20, lineHeight:1.5 }}>
+              Las estadísticas se generan a partir de tu historial de sesiones. Necesitás iniciar sesión.
+            </div>
+            <button onClick={onGoLogin}
+              style={{ padding:'12px 22px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:700, cursor:'pointer' }}>
+              Iniciar sesión
+            </button>
+          </div>
+        )}
+
+        {loading && user && !isGuest && (
+          <div style={{ padding:'40px 0', textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:10 }}>
+            <Spinner />
+            <span style={{ ...mono, fontSize:11, color:C.muted }}>Cargando...</span>
+          </div>
+        )}
+
+        {!loading && user && !isGuest && (<>
+
+          {/* 1. Resumen */}
+          <DashboardSection title="Resumen">
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+              {[
+                { label:'Sesiones',  value: summary?.sessions ?? 0,                       color:C.text },
+                { label:'Puzzles',   value: summary?.puzzles  ?? 0,                       color:C.text },
+                { label:'Precisión', value: `${Math.round(summary?.accuracy ?? 0)}%`,    color:C.amber },
+              ].map(s => (
+                <div key={s.label} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 12px', textAlign:'center' }}>
+                  <div style={{ ...mono, fontSize: desktop ? 28 : 22, fontWeight:700, color:s.color, lineHeight:1 }}>{s.value}</div>
+                  <div style={{ ...mono, fontSize:8, letterSpacing:2, color:C.muted, marginTop:6, textTransform:'uppercase' }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          </DashboardSection>
+
+          {/* 2. Racha */}
+          <DashboardSection title="Racha">
+            <div style={{ display:'flex', alignItems:'center', gap:24, flexWrap:'wrap' }}>
+              <div>
+                <div style={{ ...cinzel, fontSize:36, fontWeight:700, color:C.amber, lineHeight:1 }}>
+                  {streak?.current ?? 0}
+                </div>
+                <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:4, textTransform:'uppercase' }}>
+                  Días seguidos
+                </div>
+              </div>
+              <div style={{ height:36, width:1, background:C.border }} />
+              <div>
+                <div style={{ ...mono, fontSize:24, fontWeight:600, color:C.text, lineHeight:1 }}>
+                  {streak?.longest ?? 0}
+                </div>
+                <div style={{ ...mono, fontSize:9, letterSpacing:2, color:C.muted, marginTop:4, textTransform:'uppercase' }}>
+                  Mejor racha
+                </div>
+              </div>
+            </div>
+          </DashboardSection>
+
+          {/* 3. Calendario */}
+          <DashboardSection title="Actividad">
+            <ActivityHeatmap days={heatmapDays} activity={activity} />
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:12, ...mono, fontSize:9, color:C.muted, letterSpacing:1 }}>
+              Menos
+              {[
+                'rgba(255,255,255,0.04)',
+                'rgba(193,127,42,0.35)',
+                'rgba(193,127,42,0.6)',
+                'rgba(193,127,42,0.85)',
+                C.amber,
+              ].map((c, i) => (
+                <span key={i} style={{ width:10, height:10, background:c, borderRadius:2, display:'inline-block' }}/>
+              ))}
+              Más
+            </div>
+          </DashboardSection>
+
+          {/* 4. Progreso de score */}
+          <DashboardSection title="Progreso">
+            <div style={{ display:'flex', gap:6, marginBottom:14, flexWrap:'wrap' }}>
+              {(['storm','streak','practice'] as Mode[]).map(m => {
+                const sel = scoreMode === m
+                const lbl = m === 'storm' ? 'Storm' : m === 'streak' ? 'Streak' : 'Práctica'
+                return (
+                  <button key={m} onClick={() => setScoreMode(m)}
+                    style={{
+                      ...mono, fontSize:10, letterSpacing:1, fontWeight:600,
+                      padding:'6px 14px', borderRadius:16,
+                      border:`1px solid ${sel ? C.amber : C.border}`,
+                      background: sel ? C.amberBg : C.surface,
+                      color: sel ? C.amber : C.muted, cursor:'pointer',
+                    }}>{lbl}</button>
+                )
+              })}
+            </div>
+            {weekly.length < 5 ? (
+              <div style={{
+                background:C.surface, border:`1px solid ${C.border}`, borderRadius:12,
+                padding:'24px 20px', textAlign:'center', color:C.muted, fontSize:12, lineHeight:1.5,
+              }}>
+                Completá {Math.max(0, 5 - weekly.length)} sesiones más de {scoreMode === 'storm' ? 'Storm' : scoreMode === 'streak' ? 'Streak' : 'Práctica'} para ver tu curva de progreso.
+              </div>
+            ) : (
+              <ScoreChart weekly={weekly} mode={scoreMode} />
+            )}
+          </DashboardSection>
+
+          {/* 5. Temas */}
+          <DashboardSection title="Temas">
+            {themes.length < 3 ? (
+              <div style={{
+                background:C.surface, border:`1px solid ${C.border}`, borderRadius:12,
+                padding:'24px 20px', textAlign:'center', color:C.muted, fontSize:12, lineHeight:1.5,
+              }}>
+                Con 10+ sesiones aparece tu análisis táctico.
+              </div>
+            ) : (
+              <ThemeBreakdown themes={themes} />
+            )}
+          </DashboardSection>
+
+          {/* 6. Mejores scores all-time */}
+          <DashboardSection title="Mejores scores">
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+              {(['storm','streak','practice'] as Mode[]).map(m => {
+                const b = bests.find(x => x.mode === m)
+                const lbl = m === 'storm' ? 'Storm' : m === 'streak' ? 'Streak' : 'Práctica'
+                const has = b && b.best_score > 0
+                return (
+                  <div key={m} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'14px 12px', textAlign:'center' }}>
+                    <div style={{ ...mono, fontSize:8, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginBottom:6 }}>{lbl}</div>
+                    <div style={{ ...mono, fontSize:24, fontWeight:700, color: has ? C.amber : C.text, opacity: has ? 1 : 0.3, lineHeight:1 }}>
+                      {has ? b!.best_score : '—'}
+                    </div>
+                    {has && (
+                      <div style={{ ...mono, fontSize:8, color:C.muted, marginTop:6, letterSpacing:1 }}>
+                        {fmtRelativeDate(b!.best_date)}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </DashboardSection>
+        </>)}
+      </div>
+    </div>
+  )
+}
+
+function DashboardSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginBottom:28 }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:10 }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// ── Activity heatmap (GitHub style) ────────────────────────────────────────
+function ActivityHeatmap({ days, activity }: { days: number; activity: Map<string, number> }) {
+  const today = new Date()
+  today.setUTCHours(0, 0, 0, 0)
+  const weeks = Math.ceil(days / 7)
+  const cells: Array<{ date: string; count: number }> = []
+  for (let off = days - 1; off >= 0; off--) {
+    const d = new Date(today.getTime() - off * 24*60*60*1000)
+    const dStr = d.toISOString().split('T')[0]
+    cells.push({ date: dStr, count: activity.get(dStr) ?? 0 })
+  }
+  // Reorganizar en columnas (semanas)
+  const cols: Array<typeof cells> = []
+  for (let i = 0; i < weeks; i++) cols.push(cells.slice(i*7, (i+1)*7))
+
+  const colorFor = (n: number) => {
+    if (n === 0) return 'rgba(255,255,255,0.04)'
+    if (n === 1) return 'rgba(193,127,42,0.35)'
+    if (n === 2) return 'rgba(193,127,42,0.6)'
+    if (n === 3) return 'rgba(193,127,42,0.85)'
+    return C.amber
+  }
+
+  return (
+    <div style={{ overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
+      <div style={{ display:'inline-flex', gap:3 }}>
+        {cols.map((col, i) => (
+          <div key={i} style={{ display:'flex', flexDirection:'column', gap:3 }}>
+            {col.map(c => (
+              <div key={c.date}
+                title={`${c.date} · ${c.count} sesion${c.count !== 1 ? 'es' : ''}`}
+                style={{ width:11, height:11, borderRadius:2, background: colorFor(c.count) }}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Score chart (gráfico de barras simple) ─────────────────────────────────
+function ScoreChart({ weekly, mode }: { weekly: WeeklyScore[]; mode: Mode }) {
+  const max = Math.max(...weekly.map(w => w.avg_score), 1)
+  const label = mode === 'streak' ? 'Racha máxima promedio' : 'Score promedio'
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'18px 16px' }}>
+      <div style={{ display:'flex', alignItems:'flex-end', gap:6, height:140 }}>
+        {weekly.map(w => {
+          const h = (w.avg_score / max) * 100
+          return (
+            <div key={w.week} title={`${w.week} · ${w.avg_score.toFixed(1)} (${w.count} sesiones)`}
+              style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'flex-end', alignItems:'center', minWidth:0 }}>
+              <div style={{ width:'100%', maxWidth:32, height:`${h}%`, background:C.amber, borderRadius:'3px 3px 0 0', minHeight:2, transition:'height .2s' }} />
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ ...mono, fontSize:9, letterSpacing:1, color:C.muted, marginTop:10, textAlign:'center' }}>
+        {label} · {weekly.length} semana{weekly.length !== 1 ? 's' : ''}
+      </div>
+    </div>
+  )
+}
+
+// ── Theme breakdown (fortalezas + a mejorar) ───────────────────────────────
+function ThemeBreakdown({ themes }: { themes: ThemeStats[] }) {
+  // Top 3 por accuracy (fortalezas), bottom 3 (a mejorar)
+  const sorted = [...themes].sort((a, b) => b.accuracy - a.accuracy)
+  const strong = sorted.slice(0, 3)
+  const weak   = sorted.slice(-3).reverse()
+
+  const Bar = ({ label, accuracy, color }: { label: string; accuracy: number; color: string }) => (
+    <div style={{ marginBottom:10 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+        <span style={{ fontSize:13, color:C.text, textTransform:'capitalize' }}>{label}</span>
+        <span style={{ ...mono, fontSize:11, color:C.muted, letterSpacing:1 }}>{Math.round(accuracy)}%</span>
+      </div>
+      <div style={{ height:6, background:C.surface, borderRadius:3, overflow:'hidden' }}>
+        <div style={{ height:'100%', width:`${accuracy}%`, background:color, borderRadius:3, transition:'width .3s' }} />
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24 }}>
+      <div>
+        <div style={{ ...mono, fontSize:8, letterSpacing:2, color:C.muted, marginBottom:10, textTransform:'uppercase' }}>Fortalezas</div>
+        {strong.map(t => <Bar key={t.theme} label={t.theme} accuracy={t.accuracy} color={C.correct} />)}
+      </div>
+      <div>
+        <div style={{ ...mono, fontSize:8, letterSpacing:2, color:C.muted, marginBottom:10, textTransform:'uppercase' }}>A mejorar</div>
+        {weak.map(t => <Bar key={t.theme} label={t.theme} accuracy={t.accuracy} color="rgba(224,82,82,0.7)" />)}
+      </div>
+    </div>
+  )
 }
 
 // ══ Login ═════════════════════════════════════════════════════════════════════
@@ -632,7 +1337,7 @@ function FeedbackModal({ userId, onClose }: { userId?: string; onClose: () => vo
   )
 }
 
-function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess }: {
+function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess, onShowDashboard }: {
   user?:AuthUser; isGuest:boolean; isOnline:boolean
   mode:Mode; setMode:(m:Mode)=>void
   selectedThemes:string[]; setSelectedThemes:(s:string[])=>void
@@ -641,9 +1346,9 @@ function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, 
   setRatingRange:(lo:number, hi:number)=>void
   onStart:()=>void; onLogout:()=>void
   onConnectLichess:()=>void
+  onShowDashboard:()=>void
 }) {
   const [showThemes,   setShowThemes]   = useState(false)
-  const [tab,          setTab]          = useState<'train'|'tools'>('train')
   const [showFeedback, setShowFeedback] = useState(false)
   const desktop = useIsDesktop()
   const userElo  = user?.lichessElo
@@ -714,35 +1419,9 @@ function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, 
           )}
         </div>
 
-        {/* Tabs: Entrenar / Herramientas */}
-        <div style={{ display:'flex', borderBottom:`1px solid ${C.border}`, marginBottom:24 }}>
-          {([
-            { id:'train', label:'Entrenar',     badge: undefined as string|undefined },
-            { id:'tools', label:'Herramientas', badge:'PRONTO' as string|undefined },
-          ] as const).map(t => {
-            const sel = tab === t.id
-            return (
-              <button key={t.id} onClick={() => setTab(t.id)}
-                style={{
-                  flex:1, padding:'12px 8px', background:'transparent', border:'none',
-                  borderBottom:`2px solid ${sel ? C.amber : 'transparent'}`,
-                  color:sel ? C.amber : C.muted,
-                  fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:600,
-                  cursor:'pointer', transition:'all .15s',
-                  display:'flex', alignItems:'center', justifyContent:'center', gap:7,
-                }}>
-                {t.label}
-                {t.badge && (
-                  <span style={{ ...mono, fontSize:8, letterSpacing:1.5, padding:'2px 6px', borderRadius:4, background:'rgba(255,255,255,0.06)', color:C.muted }}>
-                    {t.badge}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-
-        {tab === 'train' && <>
+        {/* Tabs internas removidas — la sección "Entrenar" ahora es parte
+            del nav lateral / inferior. Lo que sigue es solo la pantalla de
+            configuración del entrenamiento. */}
 
         {/* Selector de modo */}
         <div style={{ marginBottom:24 }}>
@@ -829,29 +1508,24 @@ function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, 
           style={{ width:'100%', padding:'16px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif", fontSize:15, fontWeight:700, cursor:'pointer' }}>
           {startLabel}
         </button>
-        </>}
 
-        {tab === 'tools' && (
-          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-            {[
-              { title:'Woodpecker',           desc:'Repetición espaciada de tus puzzles más difíciles. Inspirado en el método del Pájaro Carpintero.' },
-              { title:'Análisis de errores',  desc:'Detecta tus patrones tácticos de falla según tu nivel. Entrenamiento personalizado.' },
-            ].map(card => (
-              <div key={card.title}
-                style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 18px', opacity:0.65 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
-                  <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{card.title}</div>
-                  <span style={{ ...mono, fontSize:8, letterSpacing:1.5, padding:'3px 8px', borderRadius:20, background:'rgba(255,255,255,0.05)', color:C.muted, textTransform:'uppercase' }}>
-                    Próximamente
-                  </span>
-                </div>
-                <div style={{ fontSize:12, color:C.muted, lineHeight:1.5 }}>{card.desc}</div>
-              </div>
-            ))}
-            <div style={{ ...mono, fontSize:10, color:C.muted, marginTop:8, textAlign:'center', letterSpacing:1, lineHeight:1.5 }}>
-              Las herramientas analizan tu historial de sesiones. Requieren cuenta.
-            </div>
-          </div>
+        {/* Link al dashboard (solo si hay user logueado, en guest no tiene sentido) */}
+        {!isGuest && user && (
+          <button onClick={onShowDashboard}
+            style={{
+              width:'100%', marginTop:14, padding:'12px',
+              background:'transparent', border:'none',
+              color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:500,
+              cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+            }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="8" width="2.5" height="5" rx="0.5" fill="currentColor"/>
+              <rect x="5.75" y="5" width="2.5" height="8" rx="0.5" fill="currentColor"/>
+              <rect x="10.5" y="2" width="2.5" height="11" rx="0.5" fill="currentColor"/>
+            </svg>
+            Ver mi progreso
+            <span style={{ fontSize:13 }}>›</span>
+          </button>
         )}
 
         {/* Footer */}
@@ -1364,6 +2038,7 @@ function PreparingScreen({ mode, error, onCancel, onRetry }: {
 // ══ Root ══════════════════════════════════════════════════════════════════════
 export default function App() {
   const [appState, setAppState] = useState<AppState>('init')
+  const [section,  setSection]  = useState<Section>('train')
   const [authUser, setAuthUser] = useState<AuthUser|null>(null)
   const [isGuest,  setIsGuest]  = useState(false)
   const [mode,     setMode]     = useState<Mode>('storm')
@@ -1470,8 +2145,9 @@ export default function App() {
         const profile = await getProfile(supaUser.id).catch(() => null)
         if (!mounted) return
         if (profile?.lichess_elo) {
-          built.lichessElo = profile.lichess_elo
-          built.lichessId  = profile.lichess_id
+          built.lichessElo       = profile.lichess_elo
+          built.lichessEloFormat = profile.lichess_elo_format ?? undefined
+          built.lichessId        = profile.lichess_id
           if (profile.username) built.username = profile.username
           setMinRating(Math.max(400, profile.lichess_elo - 200))
           setMaxRating(Math.min(3000, profile.lichess_elo + 200))
@@ -1502,9 +2178,10 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Storm timer (solo modo Storm)
+  // Storm timer (solo modo Storm). Pausa si la sección activa no es Entrenar
+  // (o sea, si el usuario navegó a Pájaro Carpintero / Análisis durante el juego).
   useEffect(() => {
-    if (mode !== 'storm' || appState !== 'storm' || screen !== 'storm' || !timerStarted) return
+    if (mode !== 'storm' || appState !== 'storm' || screen !== 'storm' || section !== 'train' || !timerStarted) return
     timerRef.current = setInterval(() => {
       setTimeLeft(t => {
         if (t <= 1) { clearInterval(timerRef.current!); endSessRef.current(); return 0 }
@@ -1512,7 +2189,7 @@ export default function App() {
       })
     }, 1000)
     return () => clearInterval(timerRef.current!)
-  }, [mode, appState, screen, timerStarted])
+  }, [mode, appState, section, screen, timerStarted])
 
   const loadNext = useCallback(async () => {
     setLoading(true); setFetchError(null)
@@ -1733,6 +2410,11 @@ export default function App() {
     setAppState('config'); setScreen('storm')
   }, [])
 
+  const goDashboard = useCallback(() => {
+    clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
+    setAppState('dashboard'); setScreen('storm')
+  }, [])
+
   const logout = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
     await signOut()
@@ -1761,23 +2443,25 @@ export default function App() {
 
         // Guardar en perfil de Supabase
         await updateProfile(authUser!.id, {
-          lichess_id:  account.id,
-          lichess_elo: account.puzzleElo,
-          username:    account.username,
+          lichess_id:         account.id,
+          lichess_elo:        account.elo,
+          lichess_elo_format: account.eloFormat,
+          username:           account.username,
         })
 
         // Actualizar estado local
         setAuthUser(prev => prev ? {
           ...prev,
-          lichessId:  account.id,
-          lichessElo: account.puzzleElo,
-          username:   account.username,
+          lichessId:        account.id,
+          lichessElo:       account.elo,
+          lichessEloFormat: account.eloFormat,
+          username:         account.username,
         } : prev)
 
         // Calibrar slider al ELO de Lichess
-        if (account.puzzleElo) {
-          setMinRating(Math.max(400, account.puzzleElo - 200))
-          setMaxRating(Math.min(3000, account.puzzleElo + 200))
+        if (account.elo) {
+          setMinRating(Math.max(400, account.elo - 200))
+          setMaxRating(Math.min(3000, account.elo + 200))
         }
       } catch (e) {
         console.error('Error procesando callback de Lichess:', e)
@@ -1814,43 +2498,81 @@ export default function App() {
     </div>
   )
   if (appState==='login') return <LoginScreen onGuest={goGuest} />
-  if (appState==='config') return (
-    <ConfigScreen
-      user={authUser??undefined} isGuest={isGuest} isOnline={isOnline}
-      mode={mode} setMode={setMode}
-      selectedThemes={selectedThemes} setSelectedThemes={setSelectedThemes}
-      selectedOpenings={selectedOpenings} setSelectedOpenings={setSelectedOpenings}
-      minRating={minRating} maxRating={maxRating} setRatingRange={setRatingRange}
-      onStart={startSession} onLogout={logout} onConnectLichess={connectLichess}
-    />
-  )
-  if (appState==='preparing') return <PreparingScreen mode={mode} error={fetchError} onCancel={goConfig} onRetry={startSession} />
-  if (appState==='storm' && screen==='storm') return (
-    <GameScreen
-      mode={mode}
-      puzzle={puzzle} currentFen={currentFen} currentTurn={currentTurn}
-      dests={dests} puzzleNum={puzzleCount+1}
-      minutes={minutes} timeLeft={timeLeft} timerStarted={timerStarted}
-      scoreOk={scoreOk} scoreErr={scoreErr} attempts={attempts}
-      feedback={feedback}
-      loading={loading} error={fetchError}
-      hintLevel={hintLevel}
-      hintMove={puzzle?.solution[moveIdx]}
-      solving={solving}
-      onRetry={loadNext}
-      onMove={handleMove} onEnd={endSess} onSkip={advanceToNext}
-      onHint={requestHint} onSolution={playSolution}
-    />
-  )
-  if (appState==='review') return <ReviewScreen puzzles={reviewPuzzles} idx={reviewIdx} onNext={nextReview} onBack={backToResults} />
+
+  // Si la sección activa NO es Entrenar, mostrar la pantalla "Próximamente"
+  // del módulo correspondiente (con nav expandido).
+  if (section !== 'train') {
+    return (
+      <NavLayout section={section} onSection={setSection} variant="expanded" user={authUser ?? undefined} onLogout={logout}>
+        <ComingSoonScreen section={section} />
+      </NavLayout>
+    )
+  }
+
+  // Sección Entrenar — variante del nav según el appState. Durante el juego
+  // (preparing/storm/review) el nav se contrae en desktop y se oculta en mobile.
+  const navVariant: 'expanded'|'collapsed' =
+    (appState === 'preparing' || appState === 'storm' || appState === 'review') ? 'collapsed' : 'expanded'
+
+  let inner: React.ReactNode
+  if (appState === 'config') {
+    inner = (
+      <ConfigScreen
+        user={authUser??undefined} isGuest={isGuest} isOnline={isOnline}
+        mode={mode} setMode={setMode}
+        selectedThemes={selectedThemes} setSelectedThemes={setSelectedThemes}
+        selectedOpenings={selectedOpenings} setSelectedOpenings={setSelectedOpenings}
+        minRating={minRating} maxRating={maxRating} setRatingRange={setRatingRange}
+        onStart={startSession} onLogout={logout} onConnectLichess={connectLichess}
+        onShowDashboard={goDashboard}
+      />
+    )
+  } else if (appState === 'dashboard') {
+    inner = (
+      <DashboardScreen
+        user={authUser ?? undefined} isGuest={isGuest}
+        onBack={goConfig} onGoLogin={() => setAppState('login')}
+      />
+    )
+  } else if (appState === 'preparing') {
+    inner = <PreparingScreen mode={mode} error={fetchError} onCancel={goConfig} onRetry={startSession} />
+  } else if (appState === 'storm' && screen === 'storm') {
+    inner = (
+      <GameScreen
+        mode={mode}
+        puzzle={puzzle} currentFen={currentFen} currentTurn={currentTurn}
+        dests={dests} puzzleNum={puzzleCount+1}
+        minutes={minutes} timeLeft={timeLeft} timerStarted={timerStarted}
+        scoreOk={scoreOk} scoreErr={scoreErr} attempts={attempts}
+        feedback={feedback}
+        loading={loading} error={fetchError}
+        hintLevel={hintLevel}
+        hintMove={puzzle?.solution[moveIdx]}
+        solving={solving}
+        onRetry={loadNext}
+        onMove={handleMove} onEnd={endSess} onSkip={advanceToNext}
+        onHint={requestHint} onSolution={playSolution}
+      />
+    )
+  } else if (appState === 'review') {
+    inner = <ReviewScreen puzzles={reviewPuzzles} idx={reviewIdx} onNext={nextReview} onBack={backToResults} />
+  } else {
+    // results
+    inner = (
+      <ResultsScreen
+        mode={mode}
+        minutes={minutes} scoreOk={scoreOk} scoreErr={scoreErr}
+        history={history}
+        bestScores={mode === 'streak' ? bestStreaks : bestScores}
+        streakBreaker={streakBreaker}
+        onRepeat={startSession} onReview={startReview} onConfig={goConfig}
+      />
+    )
+  }
+
   return (
-    <ResultsScreen
-      mode={mode}
-      minutes={minutes} scoreOk={scoreOk} scoreErr={scoreErr}
-      history={history}
-      bestScores={mode === 'streak' ? bestStreaks : bestScores}
-      streakBreaker={streakBreaker}
-      onRepeat={startSession} onReview={startReview} onConfig={goConfig}
-    />
+    <NavLayout section={section} onSection={setSection} variant={navVariant} user={authUser ?? undefined} onLogout={logout}>
+      {inner}
+    </NavLayout>
   )
 }

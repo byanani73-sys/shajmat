@@ -4,13 +4,16 @@ import type { User } from '@supabase/supabase-js'
 export const LICHESS = 'https://lichess.org'
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
+export type LichessEloFormat = 'classical' | 'rapid' | 'blitz' | 'bullet' | 'puzzle'
+
 export interface AuthUser {
-  id:          string
-  email?:      string
-  provider:    'google' | 'email' | 'guest'
-  username?:   string
-  lichessId?:  string
-  lichessElo?: number
+  id:                string
+  email?:            string
+  provider:          'google' | 'email' | 'guest'
+  username?:         string
+  lichessId?:        string
+  lichessElo?:       number
+  lichessEloFormat?: LichessEloFormat
 }
 
 // ── Email + contraseña ─────────────────────────────────────────────────────
@@ -78,9 +81,10 @@ export async function getProfile(userId: string) {
 }
 
 export async function updateProfile(userId: string, updates: {
-  lichess_id?: string
-  lichess_elo?: number
-  username?: string
+  lichess_id?:           string
+  lichess_elo?:          number
+  lichess_elo_format?:   LichessEloFormat
+  username?:             string
 }) {
   const { error } = await supabase
     .from('profiles')
@@ -153,12 +157,36 @@ export async function handleLichessCallback(code: string): Promise<string> {
 }
 
 export async function fetchLichessAccount(token: string): Promise<{
-  id: string; username: string; puzzleElo?: number
+  id: string; username: string
+  elo?: number
+  eloFormat?: LichessEloFormat
 }> {
   const res = await fetch(`${LICHESS}/api/account`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new Error('No se pudo obtener la cuenta de Lichess')
   const data = await res.json()
-  return { id: data.id, username: data.username, puzzleElo: data.perfs?.puzzle?.rating }
+
+  // Tomar el rating más alto entre classical/rapid/blitz/bullet, descartando
+  // ratings provisionales (prov: true) o con menos de 30 partidas. Fallback al
+  // rating de puzzles si no hay ningún formato confiable.
+  const formats: LichessEloFormat[] = ['classical', 'rapid', 'blitz', 'bullet']
+  type Cand = { format: LichessEloFormat; rating: number }
+  const candidates: Cand[] = formats
+    .map(f => ({ format: f, perf: data.perfs?.[f] }))
+    .filter(p => p.perf && !p.perf.prov && (p.perf.games ?? 0) >= 30)
+    .map(p => ({ format: p.format, rating: p.perf.rating as number }))
+
+  let elo: number | undefined
+  let eloFormat: LichessEloFormat | undefined
+  if (candidates.length > 0) {
+    const best = candidates.reduce((a, b) => (a.rating > b.rating ? a : b))
+    elo = best.rating
+    eloFormat = best.format
+  } else if (data.perfs?.puzzle?.rating) {
+    elo = data.perfs.puzzle.rating
+    eloFormat = 'puzzle'
+  }
+
+  return { id: data.id, username: data.username, elo, eloFormat }
 }
