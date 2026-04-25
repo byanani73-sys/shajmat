@@ -5,7 +5,7 @@ import { ChessBoard } from './ChessBoard'
 import type { User } from '@supabase/supabase-js'
 import {
   signInWithGoogle, signInWithEmail, signUpWithEmail, signOut,
-  onAuthStateChange, getCurrentUser, buildAuthUser, updateProfile, getProfile,
+  onAuthStateChange, getCurrentUser, buildAuthUser, updateProfile, getProfile, ensureProfile,
   startLichessOAuth, handleLichessCallback, fetchLichessAccount,
   type AuthUser,
 } from './auth'
@@ -2312,6 +2312,11 @@ export default function App() {
       if (!mounted) return
       if (supaUser) {
         const built = buildAuthUser(supaUser)
+        // Garantizar que existe perfil antes de leerlo. El trigger de Supabase
+        // `on_auth_user_created` debería crear el perfil al registrarse, pero
+        // si falló por cualquier razón este upsert lo cubre. ignoreDuplicates
+        // protege los campos de Lichess de usuarios que ya conectaron cuenta.
+        await ensureProfile(supaUser.id, built.username).catch(() => {})
         const profile = await getProfile(supaUser.id).catch(() => null)
         if (!mounted) return
         if (profile?.lichess_elo) {

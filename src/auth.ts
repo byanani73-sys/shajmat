@@ -80,6 +80,19 @@ export async function getProfile(userId: string) {
   return data
 }
 
+// Inserta el perfil básico si no existe. `ignoreDuplicates:true` garantiza
+// que no pisamos campos como lichess_elo cuando el usuario ya tiene el perfil
+// completo. Backup defensivo del trigger `on_auth_user_created` en Supabase
+// — si el trigger falla, este upsert lo cubre en el próximo login.
+export async function ensureProfile(userId: string, username: string | undefined): Promise<void> {
+  await supabase
+    .from('profiles')
+    .upsert(
+      { id: userId, username: username ?? null },
+      { onConflict: 'id', ignoreDuplicates: true },
+    )
+}
+
 export async function updateProfile(userId: string, updates: {
   lichess_id?:           string
   lichess_elo?:          number
