@@ -1649,13 +1649,16 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
   const boardWidth = desktop ? '580px' : undefined
   const boardArea = (
     <div style={{ flex: desktop ? '0 0 auto' : undefined, width: boardWidth ?? '100%' }}>
-      {/* Tags */}
+      {/* Tags — wrap + centrados en mobile, alineados a la izquierda en desktop */}
       {puzzle && (
-        <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:10 }}>
-          <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}` }}>{puzzle.theme}</span>
-          <span style={{ ...mono, fontSize:11, background:C.amberBg, color:C.amber, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.borderAm}` }}>ELO {puzzle.rating}</span>
-          <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}` }}>{currentTurn==='white'?'Blancas':'Negras'} juegan</span>
-          <span style={{ ...mono, fontSize:10, background:C.surface, color:C.faint, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}` }}>#{puzzle.id}</span>
+        <div style={{
+          display:'flex', flexWrap:'wrap', gap:6, marginBottom:10,
+          width:'100%', justifyContent: desktop ? 'flex-start' : 'center',
+        }}>
+          <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>{puzzle.theme}</span>
+          <span style={{ ...mono, fontSize:11, background:C.amberBg, color:C.amber, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.borderAm}`, whiteSpace:'nowrap' }}>ELO {puzzle.rating}</span>
+          <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>{currentTurn==='white'?'Blancas':'Negras'} juegan</span>
+          <span style={{ ...mono, fontSize:10, background:C.surface, color:C.faint, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>#{puzzle.id}</span>
         </div>
       )}
 
@@ -1687,9 +1690,11 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
   )
 
   // ── Top card varies por modo: timer / streak counter / minimal practice ──
+  // En mobile el letter-spacing es menos negativo: con la fuente más chica (48)
+  // un -3 visual quedaba apretado, sobre todo entre dígito y dos puntos.
   const stormTimerCard = (
     <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '24px 28px' : '12px 20px' }}>
-      <div style={{ ...mono, fontSize: desktop ? 72 : 48, fontWeight:700, letterSpacing:-3, lineHeight:1, color:timerColor, textAlign: desktop ? 'center' : undefined }}>{fmt(timeLeft)}</div>
+      <div style={{ ...mono, fontSize: desktop ? 72 : 44, fontWeight:700, letterSpacing: desktop ? -3 : -1, lineHeight:1, color:timerColor, textAlign:'center' }}>{fmt(timeLeft)}</div>
       <div style={{ height:2, background:C.border, borderRadius:2, marginTop:10, overflow:'hidden' }}>
         <div style={{ height:'100%', width:`${pct}%`, background:barColor, borderRadius:2, transition:'width 1s linear' }} />
       </div>
@@ -1699,10 +1704,13 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
     </div>
   )
 
+  // En mobile el card de Streak ocupaba mucho alto vs el espacio antes del
+  // tablero — bajamos padding y tamaño del número para que el tablero entre
+  // sin scroll.
   const streakCard = (
-    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '28px 28px' : '20px 20px', textAlign:'center' }}>
-      <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.muted, marginBottom:8 }}>Racha actual</div>
-      <div style={{ ...cinzel, fontSize: desktop ? 80 : 56, fontWeight:900, color:C.amber, lineHeight:1, letterSpacing:-2 }}>{scoreOk}</div>
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '28px 28px' : '10px 16px', textAlign:'center' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.muted, marginBottom: desktop ? 8 : 4 }}>Racha actual</div>
+      <div style={{ ...cinzel, fontSize: desktop ? 80 : 38, fontWeight:900, color:C.amber, lineHeight:1, letterSpacing:-2 }}>{scoreOk}</div>
     </div>
   )
 
