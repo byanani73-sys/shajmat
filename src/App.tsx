@@ -122,7 +122,8 @@ function ShajmatMark({ size = 40, color = C.amber }: { size?: number; color?: st
 
 // ─── Mode icon — 4×4 chess board with mode-specific highlight pattern ───────
 // Storm:    todos los cuadrados levemente brillantes, uno solo en ámbar (instante táctico)
-// Streak:   tres cuadrados en diagonal con opacidad creciente de ámbar (racha acumulándose)
+// Streak:   diagonal ascendente abajo-izq → arriba-der, con intensidad decreciente
+//           (la racha empieza fuerte y se va estirando)
 // Practice: todos los cuadrados apagados, ninguno destacado (sin presión)
 function ModeIcon({ mode, size = 44 }: { mode: Mode; size?: number }) {
   const base = mode === 'storm' ? 'rgba(247,244,239,0.10)' : 'rgba(247,244,239,0.07)'
@@ -136,9 +137,10 @@ function ModeIcon({ mode, size = 44 }: { mode: Mode; size?: number }) {
         let fill = base
         if (mode === 'storm' && r === 1 && c === 1) fill = C.amber
         if (mode === 'streak') {
-          if (r === 0 && c === 0) fill = 'rgba(193,127,42,0.35)'
-          if (r === 1 && c === 1) fill = 'rgba(193,127,42,0.6)'
-          if (r === 2 && c === 2) fill = C.amber
+          if (r === 3 && c === 0) fill = C.amber                         // base — máximo brillo
+          if (r === 2 && c === 1) fill = 'rgba(193,127,42,0.75)'
+          if (r === 1 && c === 2) fill = 'rgba(193,127,42,0.5)'
+          if (r === 0 && c === 3) fill = 'rgba(193,127,42,0.25)'         // punta — más tenue
         }
         return (
           <rect key={i}
