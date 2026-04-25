@@ -231,7 +231,7 @@ function LoginScreen({ onGuest }: { onGuest:()=>void }) {
         <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12, marginBottom:40 }}>
           <ShajmatMark size={56} />
           <div style={{ ...cinzel, fontSize:30, fontWeight:700, letterSpacing:6, color:C.text }}>SHAJMAT</div>
-          <div style={{ ...mono, fontSize:10, letterSpacing:4, textTransform:'uppercase', color:C.amber }}>Táctica · precisión · golpe final</div>
+          <div style={{ ...mono, fontSize:10, letterSpacing:4, textTransform:'uppercase', color:C.amber, whiteSpace:'nowrap' }}>Táctica · precisión · golpe final</div>
         </div>
 
         {notice && (
@@ -581,10 +581,11 @@ function FeedbackModal({ userId, onClose }: { userId?: string; onClose: () => vo
           fontSize:13, color:C.muted, lineHeight:1.6,
           borderLeft:`2px solid ${C.borderAm}`, paddingLeft:14, marginBottom:22,
         }}>
-          Hice Shajmat porque yo mismo no encontraba la herramienta que necesitaba.
-          Lichess es increíble pero no me dejaba filtrar tácticas por apertura y rango de
-          ELO al mismo tiempo. Así que la construí. La estoy compartiendo gratis porque
-          creo que puede ayudar a más gente a mejorar su ajedrez.
+          Hice Shajmat porque quería ciertas herramientas para entrenar ajedrez que no
+          estaba encontrando. Lichess es increíble, pero no me dejaba filtrar tácticas
+          por tema en modo storm/streak. Creo que muchos otros pueden beneficiarse de
+          estas herramientas, así que las comparto libremente. Es mi contribución al
+          mundo del Ajedrez.
         </div>
 
         {sent ? (
@@ -593,7 +594,7 @@ function FeedbackModal({ userId, onClose }: { userId?: string; onClose: () => vo
           </div>
         ) : (
           <>
-            <div style={{ fontSize:16, fontWeight:600, color:C.text, marginBottom:6 }}>¿Qué pensás?</div>
+            <div style={{ fontSize:16, fontWeight:600, color:C.text, marginBottom:6 }}>¡Ayudame a mejorar Shajmat!</div>
             <div style={{ fontSize:12, color:C.muted, marginBottom:14, lineHeight:1.5 }}>
               ¿Te gustó la app? ¿Viste algo que podría estar mejor? ¿Hay alguna funcionalidad que
               te gustaría tener? Cada mensaje llega directo a mí.
