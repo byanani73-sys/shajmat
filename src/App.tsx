@@ -23,6 +23,11 @@ import { flushPendingSessions, installOnlineOutboxListener } from './offlineOutb
 import { queuePendingSession } from './offlineDb'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
 import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, translateTheme, type ThemeOption } from './themes'
+import {
+  StockfishEngine, isStockfishSupported,
+  scoreFromWhite, scoreFavors, scoreToBarPct, formatScore, pvToSan,
+  type AnalysisUpdate, type EngineScore,
+} from './stockfish'
 
 function useIsDesktop() {
   const [desktop, setDesktop] = useState(() => window.innerWidth >= 768)
@@ -1817,6 +1822,13 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
 
 // ══ Results ═══════════════════════════════════════════════════════════════════
 // ══ Review (practicar errores, sin timer) ═════════════════════════════════════
+//
+// Stockfish (toggle OFF por default) — al activarlo aparece la barra de eval
+// a la izquierda del tablero, una flecha ámbar con el mejor movimiento
+// superpuesta, y la línea de análisis bajo el toggle. Re-analiza
+// automáticamente al cambiar de puzzle o tras cada jugada.
+const STOCKFISH_DEPTH = 18  // Mismo depth que Lichess en análisis rápido
+
 function ReviewScreen({ puzzles, idx, onNext, onBack }: {
   puzzles:HistoryEntry[]; idx:number; onNext:()=>void; onBack:()=>void
 }) {
@@ -1829,6 +1841,16 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
   const [attempts,    setAttempts]    = useState(0)
   const chessRef = useRef<Chess|null>(null)
   const advanceRef = useRef<ReturnType<typeof setTimeout>|null>(null)
+
+  // ── Stockfish ────────────────────────────────────────────────────────────
+  // El toggle empieza apagado. Al prenderlo creamos la instancia del engine
+  // y lanzamos análisis del FEN actual; cada vez que el FEN cambia (o el
+  // puzzle), re-analizamos. Al apagarlo destruimos la instancia.
+  const [stockfishOn, setStockfishOn] = useState(false)
+  const [analysis,    setAnalysis]    = useState<AnalysisUpdate | null>(null)
+  const [analyzing,   setAnalyzing]   = useState(false)
+  const engineRef = useRef<StockfishEngine | null>(null)
+  const sfSupported = isStockfishSupported()
 
   const puzzle = puzzles[idx]
 
@@ -1845,6 +1867,35 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
     setAttempts(0)
     return () => { if (advanceRef.current) clearTimeout(advanceRef.current) }
   }, [puzzle?.id])
+
+  // ── Lifecycle del engine: crear al prender el toggle, destruir al apagar
+  // o al desmontar el componente.
+  useEffect(() => {
+    if (!stockfishOn) return
+    const engine = new StockfishEngine()
+    engineRef.current = engine
+    return () => {
+      engineRef.current = null
+      engine.destroy()
+      setAnalysis(null)
+      setAnalyzing(false)
+    }
+  }, [stockfishOn])
+
+  // ── Disparar análisis cuando cambia la posición (puzzle nuevo, jugada del
+  // usuario o respuesta del rival). El engine cancela la búsqueda anterior
+  // si todavía estaba en curso, así que es seguro llamarlo en cascada.
+  useEffect(() => {
+    if (!stockfishOn || !engineRef.current || !currentFen) return
+    setAnalyzing(true)
+    setAnalysis(null)
+    engineRef.current.analyze(
+      currentFen,
+      STOCKFISH_DEPTH,
+      u => setAnalysis(u),               // updates intermedios (depth creciente)
+      u => { if (u) setAnalysis(u); setAnalyzing(false) },
+    )
+  }, [stockfishOn, currentFen])
 
   const handleMove = useCallback((orig: string, dest: string) => {
     if (feedback !== 'idle' || !puzzle || !chessRef.current) return
@@ -1918,6 +1969,16 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
                 : feedback==='thinking'? 'El rival responde...'
                 : `${currentTurn==='white'?'Blancas':'Negras'} juegan`
 
+  // Eval bar: el lado del jugador local (puzzle.turn) siempre va abajo.
+  // Por eso la barra se "voltea" si juega negras.
+  const whiteScore = analysis ? scoreFromWhite(analysis) : null
+  const barPct     = whiteScore ? scoreToBarPct(whiteScore) : 0.5  // neutro mientras carga
+  const localIsWhite = puzzle.turn === 'white'
+
+  // Línea de análisis: SAN de los próximos 5 movimientos.
+  const pvSan = analysis ? pvToSan(currentFen, analysis.pv, 5) : []
+  const engineMove = analysis?.bestMove
+
   return (
     <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'16px 16px 24px', gap:12, fontFamily:"'DM Sans',system-ui,sans-serif" }}>
 
@@ -1939,9 +2000,26 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
         {attempts > 0 && <span style={{ ...mono, fontSize:11, background:C.redBg, color:C.red, padding:'3px 10px', borderRadius:20, fontWeight:500 }}>{attempts} intento{attempts>1?'s':''}</span>}
       </div>
 
-      {/* Board */}
-      <div style={{ width:'100%', maxWidth:460, borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
-        {currentFen && <ChessBoard key={puzzle.id} fen={currentFen} orientation={puzzle.turn} turn={currentTurn} dests={dests} onMove={handleMove} feedback={feedback} showDests />}
+      {/* Board + Eval bar (cuando Stockfish está ON) */}
+      <div style={{ width:'100%', maxWidth:460, display:'flex', alignItems:'stretch', gap: stockfishOn ? 8 : 0 }}>
+        {stockfishOn && (
+          <EvalBar pct={barPct} flipped={!localIsWhite} loading={analyzing && !analysis} />
+        )}
+        <div style={{ flex:1, borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
+          {currentFen && (
+            <ChessBoard
+              key={puzzle.id}
+              fen={currentFen}
+              orientation={puzzle.turn}
+              turn={currentTurn}
+              dests={dests}
+              onMove={handleMove}
+              feedback={feedback}
+              showDests
+              engineMove={stockfishOn ? engineMove : undefined}
+            />
+          )}
+        </div>
       </div>
 
       {/* Feedback */}
@@ -1949,6 +2027,122 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
         <span style={{ fontSize:13, fontWeight:500, color:fbColor, textAlign:'center' }}>{fbText}</span>
       </div>
 
+      {/* Toggle Stockfish + línea de análisis */}
+      {sfSupported && (
+        <div style={{ width:'100%', maxWidth:460, background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'12px 16px', display:'flex', flexDirection:'column', gap: stockfishOn ? 12 : 0 }}>
+          <StockfishToggle on={stockfishOn} onToggle={() => setStockfishOn(v => !v)} />
+          {stockfishOn && (
+            <AnalysisLine
+              score={whiteScore}
+              pvSan={pvSan}
+              depth={analysis?.depth ?? 0}
+              loading={analyzing && !analysis}
+            />
+          )}
+        </div>
+      )}
+
+    </div>
+  )
+}
+
+// ─── Eval bar ──────────────────────────────────────────────────────────────
+// Barra vertical estilo Lichess: blanco abajo si el jugador local es blancas,
+// negro abajo si juega negras. La porción del jugador local crece hacia
+// arriba cuando está ganando. `pct` es 0..1 desde POV blancas.
+function EvalBar({ pct, flipped, loading }: { pct: number; flipped: boolean; loading: boolean }) {
+  // pct viene como POV blancas (1 = blanco gana). Si la barra está flipped
+  // (jugador local es negras), el negro va abajo y crece cuando pct → 0.
+  const localPct = loading ? 0.5 : (flipped ? 1 - pct : pct)
+  // Color del jugador local (arriba): el "rival" es el otro color.
+  const localColor    = flipped ? '#1a1a1a' : '#f5f5f5'  // si flipped → negras locales → bottom negro
+  const opponentColor = flipped ? '#f5f5f5' : '#1a1a1a'
+
+  return (
+    <div
+      title={loading ? 'Analizando…' : undefined}
+      style={{
+        width:18, alignSelf:'stretch', borderRadius:4, overflow:'hidden',
+        display:'flex', flexDirection:'column',
+        border:`1px solid ${C.border}`,
+        background: opponentColor,  // base = color del rival, ocupa todo
+      }}>
+      {/* Sección del jugador local — crece desde abajo */}
+      <div style={{ flex:1 }} />
+      <div style={{
+        height: `${localPct * 100}%`,
+        background: localColor,
+        transition: loading ? 'none' : 'height 0.4s ease-out',
+      }}/>
+    </div>
+  )
+}
+
+// ─── Toggle Stockfish ──────────────────────────────────────────────────────
+function StockfishToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      style={{
+        background:'transparent', border:'none', padding:0, cursor:'pointer',
+        display:'flex', alignItems:'center', justifyContent:'space-between', gap:12,
+        fontFamily:"'DM Sans',sans-serif",
+      }}>
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2 }}>
+        <span style={{ fontSize:13, fontWeight:600, color:C.text }}>Análisis Stockfish</span>
+        <span style={{ ...mono, fontSize:10, letterSpacing:1.5, textTransform:'uppercase', color:C.muted }}>
+          Motor de ajedrez · profundidad {STOCKFISH_DEPTH}
+        </span>
+      </div>
+      {/* Switch animado */}
+      <div style={{
+        width:38, height:22, borderRadius:11, padding:2,
+        background: on ? C.amber : C.surface2,
+        border: `1px solid ${on ? C.borderAm : C.border}`,
+        transition: 'background .2s, border-color .2s',
+        display:'flex', alignItems:'center', flexShrink:0,
+      }}>
+        <div style={{
+          width:16, height:16, borderRadius:'50%',
+          background: on ? '#fff' : C.muted,
+          transform: `translateX(${on ? 16 : 0}px)`,
+          transition: 'transform .2s, background .2s',
+        }}/>
+      </div>
+    </button>
+  )
+}
+
+// ─── Línea de análisis ─────────────────────────────────────────────────────
+// Estilo: "+1.4 · Blancas mejor · 1.Cf3 d5 2.d4 ... · prof. 18"
+function AnalysisLine({ score, pvSan, depth, loading }: {
+  score: EngineScore | null; pvSan: string[]; depth: number; loading: boolean
+}) {
+  if (loading || !score) {
+    return (
+      <div style={{ ...mono, fontSize:12, color:C.muted, display:'flex', alignItems:'center', gap:8 }}>
+        <Spinner /> Analizando…
+      </div>
+    )
+  }
+  const favors = scoreFavors(score)
+  const favorsText = favors === 'white' ? 'Blancas mejor'
+                  : favors === 'black' ? 'Negras mejor'
+                  :                      'Igualada'
+  const scoreColor = favors === 'equal' ? C.muted : C.amber
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+      <div style={{ display:'flex', alignItems:'baseline', gap:10, flexWrap:'wrap' }}>
+        <span style={{ ...mono, fontSize:16, fontWeight:700, color: scoreColor }}>{formatScore(score)}</span>
+        <span style={{ fontSize:12, color:C.muted }}>{favorsText}</span>
+        <span style={{ ...mono, fontSize:10, letterSpacing:1.5, textTransform:'uppercase', color:C.muted, marginLeft:'auto' }}>prof. {depth}</span>
+      </div>
+      {pvSan.length > 0 && (
+        <div style={{ ...mono, fontSize:12, color:C.text, lineHeight:1.5, wordBreak:'break-word' }}>
+          {pvSan.join(' ')}
+        </div>
+      )}
     </div>
   )
 }

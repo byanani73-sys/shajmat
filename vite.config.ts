@@ -29,7 +29,24 @@ export default defineConfig({
       workbox: {
         // App shell: HTML, JS, CSS, fuentes locales — CacheFirst (precache)
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"],
+        // El .wasm de Stockfish pesa 7MB, lejos del default de workbox (2MB).
+        // No lo precacheamos; el runtime caching de abajo lo guarda on-demand
+        // cuando el usuario activa el toggle de análisis por primera vez.
+        globIgnores: ["**/stockfish/*.wasm"],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         runtimeCaching: [
+          // Stockfish WASM + worker JS: CacheFirst, expiración larga.
+          // Una vez descargado queda disponible offline en próximas sesiones.
+          {
+            urlPattern: /\/stockfish\/.*\.(?:js|wasm)$/i,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "stockfish-engine",
+              expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+              rangeRequests: true,
+            },
+          },
           // Supabase API: NetworkFirst (intentar red, fallback caché si offline)
           {
             urlPattern: /^https:\/\/[a-z0-9]+\.supabase\.co\/.*/i,

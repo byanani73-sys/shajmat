@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Chessground } from 'chessground'
 import type { Api } from 'chessground/api'
 import type { Key } from 'chessground/types'
-import type { DrawShape } from 'chessground/draw'
+import type { DrawShape, DrawBrushes } from 'chessground/draw'
 
 interface ChessBoardProps {
   fen:         string
@@ -17,25 +17,35 @@ interface ChessBoardProps {
   // Hints: 0 = nada, 1 = círculo en origen, 2 = flecha origen→destino
   hintLevel?: 0 | 1 | 2
   hintMove?:  string  // UCI move tipo 'e2e4'
+  // Flecha del análisis del engine — UCI move (ámbar, no se confunde con hint verde)
+  engineMove?: string
 }
 
 export function ChessBoard({
   fen, orientation = 'white', turn = 'white', onMove, feedback,
-  dests, showDests = false, wrongRevertDelay = 0, hintLevel = 0, hintMove,
+  dests, showDests = false, wrongRevertDelay = 0, hintLevel = 0, hintMove, engineMove,
 }: ChessBoardProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cgRef        = useRef<Api | null>(null)
   const onMoveRef    = useRef(onMove)
   onMoveRef.current  = onMove
 
-  // Construir las shapes de hint (círculo en origen y/o flecha origen→destino)
-  const hintShapes: DrawShape[] = (() => {
-    if (!hintMove || hintLevel === 0) return []
-    const orig = hintMove.slice(0, 2) as Key
-    const dest = hintMove.slice(2, 4) as Key
-    if (hintLevel === 1) return [{ orig, brush: 'green' }]
-    if (hintLevel >= 2) return [{ orig, dest, brush: 'green' }]
-    return []
+  // Shapes auto: hint del puzzle (verde) + best move del engine (ámbar).
+  // El engine usa un brush 'amber' definido en drawable.brushes más abajo.
+  const autoShapes: DrawShape[] = (() => {
+    const out: DrawShape[] = []
+    if (hintMove && hintLevel >= 1) {
+      const orig = hintMove.slice(0, 2) as Key
+      const dest = hintMove.slice(2, 4) as Key
+      if (hintLevel === 1) out.push({ orig, brush: 'green' })
+      else                 out.push({ orig, dest, brush: 'green' })
+    }
+    if (engineMove && engineMove.length >= 4) {
+      const orig = engineMove.slice(0, 2) as Key
+      const dest = engineMove.slice(2, 4) as Key
+      out.push({ orig, dest, brush: 'amber' })
+    }
+    return out
   })()
 
   // Create Chessground ONCE on mount, destroy on unmount
@@ -58,7 +68,14 @@ export function ChessBoard({
       premovable: { enabled: false },
       draggable:  { enabled: true, distance: 3, showGhost: true },
       selectable: { enabled: true },
-      drawable:   { enabled: true, autoShapes: hintShapes },
+      drawable:   {
+        enabled: true,
+        autoShapes,
+        // Brush ámbar para la flecha del engine, alineado con los acentos de la app.
+        // Chessground tipa `brushes` como Required (todos los colores), pero en runtime
+        // hace merge con los defaults — castamos para inyectar solo el nuevo brush.
+        brushes: { amber: { key: 'a', color: '#c17f2a', opacity: 0.9, lineWidth: 10 } } as unknown as DrawBrushes,
+      },
     })
     return () => { cgRef.current?.destroy(); cgRef.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -78,7 +95,7 @@ export function ChessBoard({
           dests: dests ?? new Map(),
           showDests,
         },
-        drawable: { autoShapes: hintShapes },
+        drawable: { autoShapes },
       })
     }
 
@@ -86,12 +103,12 @@ export function ChessBoard({
     // por wrongRevertDelay ms antes de revertir, para que el usuario vea su error.
     // Mientras tanto, bloqueamos input vía movable.color = undefined (sin tocar fen).
     if (feedback === 'wrong' && wrongRevertDelay > 0) {
-      cgRef.current.set({ movable: { color: undefined }, drawable: { autoShapes: hintShapes } })
+      cgRef.current.set({ movable: { color: undefined }, drawable: { autoShapes } })
       const t = setTimeout(applyAll, wrongRevertDelay)
       return () => clearTimeout(t)
     }
     applyAll()
-  }, [fen, orientation, turn, feedback, dests, showDests, wrongRevertDelay, hintLevel, hintMove])
+  }, [fen, orientation, turn, feedback, dests, showDests, wrongRevertDelay, hintLevel, hintMove, engineMove])
 
   const ring =
     feedback === 'correct' ? 'ring-2 ring-[#6dbf6d] ring-offset-2 ring-offset-[#0e0d0b]' :
