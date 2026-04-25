@@ -10,6 +10,7 @@ import {
   type AuthUser,
 } from './auth'
 import { saveSession, saveSessionErrors, getBestScores, type BestScores, type Mode } from './sessions'
+import { saveFeedback } from './feedback'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
 import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, type ThemeOption } from './themes'
 
@@ -110,26 +111,34 @@ function ShajmatMark({ size = 40, color = C.amber }: { size?: number; color?: st
 }
 
 // ─── Mode icon — 4×4 chess board with mode-specific highlight pattern ───────
-// Storm: un cuadrado ámbar (instante táctico único)
-// Streak: cuadrados ámbar en diagonal (racha creciendo)
-// Practice: ningún cuadrado destacado (sin presión)
-function ModeIcon({ mode, size = 44, active = false }: { mode: Mode; size?: number; active?: boolean }) {
-  const cells: { r: number; c: number; light: boolean; amber: boolean }[] = []
-  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
-    const light = (r + c) % 2 === 0
-    let amber = false
-    if (mode === 'storm'  && r === 2 && c === 1) amber = true
-    if (mode === 'streak' && r + c === 3)        amber = true  // diagonal ascendente (bottom-left → top-right)
-    cells.push({ r, c, light, amber })
-  }
-  const lightSq = active ? '#3a342a' : '#2a2620'
-  const darkSq  = active ? '#231f18' : C.surface
+// Storm:    todos los cuadrados levemente brillantes, uno solo en ámbar (instante táctico)
+// Streak:   tres cuadrados en diagonal con opacidad creciente de ámbar (racha acumulándose)
+// Practice: todos los cuadrados apagados, ninguno destacado (sin presión)
+function ModeIcon({ mode, size = 44 }: { mode: Mode; size?: number }) {
+  const base = mode === 'storm' ? 'rgba(247,244,239,0.10)' : 'rgba(247,244,239,0.07)'
+  const cellSize = 8.5
+  const gap = 2
   return (
     <svg width={size} height={size} viewBox="0 0 40 40">
-      {cells.map(({ r, c, light, amber }) => (
-        <rect key={`${r}-${c}`} x={c*10} y={r*10} width={10} height={10}
-          fill={amber ? C.amber : light ? lightSq : darkSq} />
-      ))}
+      {Array.from({ length: 16 }, (_, i) => {
+        const r = Math.floor(i / 4)
+        const c = i % 4
+        let fill = base
+        if (mode === 'storm' && r === 1 && c === 1) fill = C.amber
+        if (mode === 'streak') {
+          if (r === 0 && c === 0) fill = 'rgba(193,127,42,0.35)'
+          if (r === 1 && c === 1) fill = 'rgba(193,127,42,0.6)'
+          if (r === 2 && c === 2) fill = C.amber
+        }
+        return (
+          <rect key={i}
+            x={c * (cellSize + gap)}
+            y={r * (cellSize + gap)}
+            width={cellSize} height={cellSize}
+            rx={1.5} fill={fill}
+          />
+        )
+      })}
     </svg>
   )
 }
@@ -521,6 +530,104 @@ function RangeSlider({ min, max, minValue, maxValue, step = 100, onChange }: {
   )
 }
 
+// ── Feedback modal (bottom sheet) ───────────────────────────────────────────
+function FeedbackModal({ userId, onClose }: { userId?: string; onClose: () => void }) {
+  const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sent,    setSent]    = useState(false)
+  const [error,   setError]   = useState<string|null>(null)
+
+  const handleSubmit = async () => {
+    if (!message.trim() || sending) return
+    setSending(true); setError(null)
+    const ok = await saveFeedback(message, userId)
+    setSending(false)
+    if (!ok) { setError('No se pudo enviar. Probá de nuevo.'); return }
+    setSent(true)
+    setTimeout(onClose, 2000)
+  }
+
+  return (
+    <div onClick={onClose}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-end', zIndex:200 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{
+          background:C.surface, width:'100%', maxWidth:480, margin:'0 auto',
+          borderRadius:'16px 16px 0 0', padding:'14px 24px 24px',
+          maxHeight:'90vh', overflowY:'auto',
+          animation:'shajmat-slideup .25s ease-out',
+        }}>
+        {/* Handle */}
+        <div style={{ width:36, height:3, background:'rgba(255,255,255,0.15)', borderRadius:2, margin:'0 auto 18px' }} />
+
+        {/* Creador */}
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:14 }}>
+          <div style={{
+            width:40, height:40, borderRadius:'50%',
+            background:C.amberBg, border:`1px solid ${C.borderAm}`,
+            display:'flex', alignItems:'center', justifyContent:'center',
+            ...cinzel, fontSize:18, fontWeight:700, color:C.amber,
+          }}>B</div>
+          <div>
+            <div style={{ fontSize:13, fontWeight:600, color:C.text }}>Brian</div>
+            <div style={{ ...mono, fontSize:9, letterSpacing:1.5, color:C.muted, textTransform:'uppercase' }}>
+              Creador de Shajmat
+            </div>
+          </div>
+        </div>
+
+        {/* Mensaje del creador */}
+        <div style={{
+          fontSize:13, color:C.muted, lineHeight:1.6,
+          borderLeft:`2px solid ${C.borderAm}`, paddingLeft:14, marginBottom:22,
+        }}>
+          Hice Shajmat porque yo mismo no encontraba la herramienta que necesitaba.
+          Lichess es increíble pero no me dejaba filtrar tácticas por apertura y rango de
+          ELO al mismo tiempo. Así que la construí. La estoy compartiendo gratis porque
+          creo que puede ayudar a más gente a mejorar su ajedrez.
+        </div>
+
+        {sent ? (
+          <div style={{ padding:'24px 0', textAlign:'center', fontSize:14, color:C.correct, fontWeight:500 }}>
+            ¡Gracias! Tu mensaje llegó.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize:16, fontWeight:600, color:C.text, marginBottom:6 }}>¿Qué pensás?</div>
+            <div style={{ fontSize:12, color:C.muted, marginBottom:14, lineHeight:1.5 }}>
+              ¿Te gustó la app? ¿Viste algo que podría estar mejor? ¿Hay alguna funcionalidad que
+              te gustaría tener? Cada mensaje llega directo a mí.
+            </div>
+            <textarea value={message} onChange={e => setMessage(e.target.value)}
+              placeholder="Escribí lo que pienses..." rows={4}
+              style={{
+                width:'100%', boxSizing:'border-box', padding:'12px 14px', borderRadius:10,
+                background:C.bg, border:`1px solid ${C.border}`, color:C.text,
+                fontFamily:"'DM Sans',sans-serif", fontSize:13, outline:'none',
+                resize:'vertical', marginBottom:14,
+              }} />
+            {error && <div style={{ fontSize:11, color:C.red, marginBottom:10 }}>{error}</div>}
+            <button onClick={handleSubmit} disabled={sending || !message.trim()}
+              style={{
+                width:'100%', padding:14, borderRadius:10, background:C.amber, color:C.bg, border:'none',
+                fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:700,
+                cursor:(sending || !message.trim()) ? 'not-allowed' : 'pointer',
+                opacity:(sending || !message.trim()) ? 0.5 : 1, marginBottom:8,
+              }}>
+              {sending ? 'Enviando...' : 'Enviar feedback'}
+            </button>
+            <button onClick={onClose}
+              style={{ width:'100%', padding:12, background:'transparent', border:'none', color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, cursor:'pointer' }}>
+              Cerrar
+            </button>
+          </>
+        )}
+        <style>{`@keyframes shajmat-slideup{from{transform:translateY(100%)}to{transform:translateY(0)}}`}</style>
+      </div>
+    </div>
+  )
+}
+
 function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, minRating, maxRating, setRatingRange, onStart, onLogout, onConnectLichess }: {
   user?:AuthUser; isGuest:boolean
   mode:Mode; setMode:(m:Mode)=>void
@@ -531,7 +638,9 @@ function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelecte
   onStart:()=>void; onLogout:()=>void
   onConnectLichess:()=>void
 }) {
-  const [showThemes, setShowThemes] = useState(false)
+  const [showThemes,   setShowThemes]   = useState(false)
+  const [tab,          setTab]          = useState<'train'|'tools'>('train')
+  const [showFeedback, setShowFeedback] = useState(false)
   const desktop = useIsDesktop()
   const userElo  = user?.lichessElo
   const username = user?.username ?? user?.email?.split('@')[0]
@@ -595,6 +704,37 @@ function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelecte
             </div>
           )}
         </div>
+
+        {/* Tabs: Entrenar / Herramientas */}
+        <div style={{ display:'flex', borderBottom:`1px solid ${C.border}`, marginBottom:24 }}>
+          {([
+            { id:'train', label:'Entrenar',     badge: undefined as string|undefined },
+            { id:'tools', label:'Herramientas', badge:'PRONTO' as string|undefined },
+          ] as const).map(t => {
+            const sel = tab === t.id
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                style={{
+                  flex:1, padding:'12px 8px', background:'transparent', border:'none',
+                  borderBottom:`2px solid ${sel ? C.amber : 'transparent'}`,
+                  color:sel ? C.amber : C.muted,
+                  fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:600,
+                  cursor:'pointer', transition:'all .15s',
+                  display:'flex', alignItems:'center', justifyContent:'center', gap:7,
+                }}>
+                {t.label}
+                {t.badge && (
+                  <span style={{ ...mono, fontSize:8, letterSpacing:1.5, padding:'2px 6px', borderRadius:4, background:'rgba(255,255,255,0.06)', color:C.muted }}>
+                    {t.badge}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+
+        {tab === 'train' && <>
+
         {/* Selector de modo */}
         <div style={{ marginBottom:24 }}>
           <div style={{ fontSize:11, fontWeight:500, color:C.muted, letterSpacing:1, marginBottom:10 }}>Modo</div>
@@ -612,7 +752,7 @@ function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelecte
                     display:'flex', flexDirection:'column', alignItems:'center', gap:8,
                     fontFamily:"'DM Sans',sans-serif",
                   }}>
-                  <ModeIcon mode={m} active={active} size={44} />
+                  <ModeIcon mode={m} size={44} />
                   <div style={{ fontSize:13, fontWeight:600, color: active ? C.amber : C.text }}>{label}</div>
                 </button>
               )
@@ -680,7 +820,48 @@ function ConfigScreen({ user, isGuest, mode, setMode, selectedThemes, setSelecte
           style={{ width:'100%', padding:'16px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif", fontSize:15, fontWeight:700, cursor:'pointer' }}>
           {startLabel}
         </button>
+        </>}
+
+        {tab === 'tools' && (
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            {[
+              { title:'Woodpecker',           desc:'Repetición espaciada de tus puzzles más difíciles. Inspirado en el método del Pájaro Carpintero.' },
+              { title:'Análisis de errores',  desc:'Detecta tus patrones tácticos de falla según tu nivel. Entrenamiento personalizado.' },
+            ].map(card => (
+              <div key={card.title}
+                style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 18px', opacity:0.65 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
+                  <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{card.title}</div>
+                  <span style={{ ...mono, fontSize:8, letterSpacing:1.5, padding:'3px 8px', borderRadius:20, background:'rgba(255,255,255,0.05)', color:C.muted, textTransform:'uppercase' }}>
+                    Próximamente
+                  </span>
+                </div>
+                <div style={{ fontSize:12, color:C.muted, lineHeight:1.5 }}>{card.desc}</div>
+              </div>
+            ))}
+            <div style={{ ...mono, fontSize:10, color:C.muted, marginTop:8, textAlign:'center', letterSpacing:1, lineHeight:1.5 }}>
+              Las herramientas analizan tu historial de sesiones. Requieren cuenta.
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div style={{
+          borderTop:`1px solid ${C.border}`, marginTop:32, paddingTop:18,
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ ...cinzel, fontSize:13, color:'rgba(193,127,42,0.18)' }}>ש</span>
+            <span style={{ ...mono, fontSize:10, color:C.faint, letterSpacing:1 }}>Shajmat · hecho con ♟</span>
+          </div>
+          <button onClick={() => setShowFeedback(true)}
+            style={{ ...mono, fontSize:11, color:C.muted, background:'none', border:'none', cursor:'pointer', letterSpacing:1, padding:0 }}>
+            Feedback →
+          </button>
+        </div>
       </div>
+
+      {showFeedback && <FeedbackModal userId={user?.id} onClose={() => setShowFeedback(false)} />}
     </div>
   )
 }
