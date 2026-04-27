@@ -28,7 +28,7 @@ export default defineConfig({
       },
       workbox: {
         // App shell: HTML, JS, CSS, fuentes locales — CacheFirst (precache)
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"],
+        globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest,mp3}"],
         runtimeCaching: [
           // Supabase API: NetworkFirst (intentar red, fallback caché si offline)
           {

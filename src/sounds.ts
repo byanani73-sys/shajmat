@@ -1,25 +1,20 @@
-// Audio feedback minimalista usando Web Audio API. Sin librerías ni archivos
-// de audio externos — los sonidos se sintetizan al vuelo con osciladores y
-// envolventes ADSR simples para mantener el bundle liviano.
+// Audio feedback usando los archivos MP3 de Lichess (licencia MIT).
+// Antes generábamos los tonos con Web Audio API pero el resultado sonaba
+// sintético — los SFX de Lichess están polished y los usuarios de ajedrez
+// ya los reconocen.
 //
-// El AudioContext se crea LAZY al primer sonido — los browsers requieren
-// gesture del usuario para iniciarlo. Si fallaron las políticas, los métodos
-// son no-op.
+// Los archivos viven en /public/sounds/ (Move.mp3, Capture.mp3,
+// GenericNotify.mp3, Error.mp3). Vienen del repo lichess-org/lila.
+//
+// Pre-cargamos los Audio elements al cargar el módulo para evitar lag en
+// la primera reproducción. Cada `play()` reinicia con currentTime = 0
+// para que los pulsos rápidos (warning) no se solapen consigo mismos.
 
 const STORAGE_KEY = 'shajmat_sound'
 
-let ctx: AudioContext | null = null
-function getCtx(): AudioContext | null {
-  if (typeof window === 'undefined') return null
-  if (ctx) return ctx
-  const Ctor = (window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
-  if (!Ctor) return null
-  try { ctx = new Ctor() } catch { ctx = null }
-  return ctx
-}
-
-// Volumen general — bajo para no ser intrusivo
-const MASTER_GAIN = 0.15
+// Volumen general — bajo para no ser intrusivo. Los assets de Lichess
+// están bien normalizados así que con 0.5 alcanza.
+const MASTER_VOLUME = 0.5
 
 // ─── Toggle de sonido (persistido en localStorage) ─────────────────────────
 export function isSoundEnabled(): boolean {
@@ -34,56 +29,69 @@ export function toggleSound(): boolean {
   return next
 }
 
-// ─── Helper: emite un tono con envolvente ADSR sencilla ────────────────────
-//
-// freq:        frecuencia en Hz (puede ser número o función para barrido)
-// duration:    duración total en ms (incluye attack + decay/release)
-// type:        forma de onda
-// curve:       'flat' | 'rise' | 'fall' — modulación de pitch durante el tono
-function tone(freq: number, duration: number, type: OscillatorType = 'sine', curve: 'flat'|'rise'|'fall' = 'flat'): void {
+// ─── Pre-carga de audio elements ───────────────────────────────────────────
+// Los creamos perezosamente para no fallar en SSR/tests sin window.
+// preload='auto' fuerza al browser a bajar el archivo al instanciar el
+// elemento, así la primera reproducción no tiene jitter.
+type SoundKey = 'move' | 'correct' | 'wrong' | 'notify'
+
+const SOUND_FILES: Record<SoundKey, string> = {
+  move:    '/sounds/Move.mp3',
+  correct: '/sounds/GenericNotify.mp3',
+  wrong:   '/sounds/Error.mp3',
+  notify:  '/sounds/GenericNotify.mp3',
+}
+
+let cache: Partial<Record<SoundKey, HTMLAudioElement>> = {}
+
+function getAudio(key: SoundKey): HTMLAudioElement | null {
+  if (typeof window === 'undefined') return null
+  const cached = cache[key]
+  if (cached) return cached
+  try {
+    const a = new Audio(SOUND_FILES[key])
+    a.preload = 'auto'
+    a.volume  = MASTER_VOLUME
+    cache[key] = a
+    return a
+  } catch {
+    return null
+  }
+}
+
+// Pre-cargar todos los assets al importar el módulo (no-op en SSR)
+if (typeof window !== 'undefined') {
+  for (const key of Object.keys(SOUND_FILES) as SoundKey[]) getAudio(key)
+}
+
+// Reproduce un sonido respetando el toggle. Reinicia el elemento al inicio
+// para soportar disparos rápidos consecutivos (caso típico: warning doble).
+function play(key: SoundKey): void {
   if (!isSoundEnabled()) return
-  const c = getCtx()
-  if (!c) return
-  // En algunos browsers el ctx queda 'suspended' hasta el primer gesture
-  if (c.state === 'suspended') c.resume().catch(() => {})
-
-  const now = c.currentTime
-  const dur = duration / 1000
-
-  const osc = c.createOscillator()
-  osc.type = type
-  osc.frequency.setValueAtTime(freq, now)
-  if (curve === 'rise')      osc.frequency.linearRampToValueAtTime(freq * 1.5, now + dur)
-  else if (curve === 'fall') osc.frequency.linearRampToValueAtTime(freq * 0.6, now + dur)
-
-  const gain = c.createGain()
-  // Envolvente: attack 8ms, decay/release el resto
-  gain.gain.setValueAtTime(0, now)
-  gain.gain.linearRampToValueAtTime(MASTER_GAIN, now + 0.008)
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + dur)
-
-  osc.connect(gain).connect(c.destination)
-  osc.start(now)
-  osc.stop(now + dur + 0.01)
+  const a = getAudio(key)
+  if (!a) return
+  try {
+    a.currentTime = 0
+    // .play() devuelve una Promise que rechaza si el browser bloquea por
+    // falta de gesture. La descartamos silenciosamente — el usuario va a
+    // hacer click en algún momento y la próxima vez funciona.
+    a.play().catch(() => {})
+  } catch {}
 }
 
-// ─── Movimiento correcto: tono ascendente agradable ────────────────────────
-export function playCorrect(): void {
-  tone(523.25, 150, 'sine', 'rise')   // Do5 sube ~Sol5
-}
+// ─── API pública — mismo shape que la versión Web Audio ───────────────────
 
-// ─── Movimiento incorrecto: tono descendente sutil ─────────────────────────
-export function playWrong(): void {
-  tone(200, 200, 'triangle', 'fall')
-}
+// Movimiento correcto del jugador
+export function playCorrect(): void { play('correct') }
 
-// ─── Pieza rival responde: click suave neutro ──────────────────────────────
-export function playMove(): void {
-  tone(300, 80, 'sine', 'flat')
-}
+// Movimiento incorrecto del jugador
+export function playWrong(): void { play('wrong') }
 
-// ─── Aviso 30s: dos pulsos cortos de alerta ────────────────────────────────
+// Pieza del rival responde
+export function playMove(): void { play('move') }
+
+// Aviso de 30 segundos: dos pulsos cortos del notify con 200ms entre medio
 export function playWarning(): void {
-  tone(440, 100, 'square', 'flat')
-  setTimeout(() => tone(440, 100, 'square', 'flat'), 150)
+  play('notify')
+  setTimeout(() => play('notify'), 200)
 }
