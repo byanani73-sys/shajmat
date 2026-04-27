@@ -1825,34 +1825,55 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
 
 // ══ Results ═══════════════════════════════════════════════════════════════════
 // ══ Review (practicar errores, sin timer) ═════════════════════════════════════
+//
+// Mismo layout y proporciones que GameScreen — sidebar contraída a la izquierda
+// (gestionada por NavLayout en el componente padre), tablero grande a la
+// derecha en desktop, columna en mobile. El sidePanel reemplaza el timer/score
+// stack por un card de "Practicar errores · N/M", contador de intentos y
+// botones para reintentar / saltar / volver a resultados.
 function ReviewScreen({ puzzles, idx, onNext, onBack }: {
   puzzles:HistoryEntry[]; idx:number; onNext:()=>void; onBack:()=>void
 }) {
-  const [currentFen,  setCurrentFen]  = useState('')
+  const desktop = useIsDesktop()
+  const [soundOn,    setSoundOn]    = useState(() => isSoundEnabled())
+  const [currentFen, setCurrentFen] = useState('')
   const [currentTurn, setCurrentTurn] = useState<'white'|'black'>('white')
-  const [dests,       setDests]       = useState<Map<Key, Key[]>>(new Map())
-  const [moveIdx,     setMoveIdx]     = useState(0)
-  const [feedback,    setFeedback]    = useState<Feedback>('idle')
-  const [wrongHint,   setWrongHint]   = useState<string|null>(null)
-  const [attempts,    setAttempts]    = useState(0)
-  const chessRef = useRef<Chess|null>(null)
+  const [dests,      setDests]      = useState<Map<Key, Key[]>>(new Map())
+  const [moveIdx,    setMoveIdx]    = useState(0)
+  const [feedback,   setFeedback]   = useState<Feedback>('idle')
+  const [wrongHint,  setWrongHint]  = useState<string|null>(null)
+  const [attempts,   setAttempts]   = useState(0)
+  const chessRef   = useRef<Chess|null>(null)
   const advanceRef = useRef<ReturnType<typeof setTimeout>|null>(null)
 
   const puzzle = puzzles[idx]
 
-  useEffect(() => {
-    if (!puzzle) return
-    const c = new Chess(puzzle.fen)
+  // Setup de un puzzle: reusable para el inicial y para "Intentar de nuevo".
+  const setupPuzzle = useCallback((p: HistoryEntry) => {
+    const c = new Chess(p.fen)
     chessRef.current = c
-    setCurrentFen(puzzle.fen)
-    setCurrentTurn(puzzle.turn)
+    setCurrentFen(p.fen)
+    setCurrentTurn(p.turn)
     setDests(computeDests(c))
     setMoveIdx(0)
     setFeedback('idle')
     setWrongHint(null)
+  }, [])
+
+  useEffect(() => {
+    if (!puzzle) return
+    setupPuzzle(puzzle)
     setAttempts(0)
     return () => { if (advanceRef.current) clearTimeout(advanceRef.current) }
-  }, [puzzle?.id])
+  }, [puzzle?.id, setupPuzzle])
+
+  const handleRetry = useCallback(() => {
+    if (!puzzle) return
+    if (advanceRef.current) clearTimeout(advanceRef.current)
+    setupPuzzle(puzzle)
+    // Mantenemos `attempts` — el contador acumula intentos de la sesión
+    // de review, no se reinicia por reset manual.
+  }, [puzzle, setupPuzzle])
 
   const handleMove = useCallback((orig: string, dest: string) => {
     if (feedback !== 'idle' || !puzzle || !chessRef.current) return
@@ -1873,6 +1894,7 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
 
       setFeedback('wrong')
       setAttempts(a => a + 1)
+      playWrong()
       // In review: bounce back, let user keep trying
       advanceRef.current = setTimeout(() => {
         setFeedback('idle')
@@ -1894,6 +1916,7 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
     if (nextMoveIdx >= puzzle.solution.length) {
       setFeedback('correct')
       setWrongHint(null)
+      playCorrect()
       advanceRef.current = setTimeout(onNext, 1200)
       return
     }
@@ -1914,6 +1937,7 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
       setDests(computeDests(chessRef.current))
       setMoveIdx(nextMoveIdx + 1)
       setFeedback('idle')
+      playMove()
     }, 550)
   }, [feedback, puzzle, moveIdx, currentFen, onNext])
 
@@ -1926,37 +1950,123 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
                 : feedback==='thinking'? 'El rival responde...'
                 : `${currentTurn==='white'?'Blancas':'Negras'} juegan`
 
-  return (
-    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'16px 16px 24px', gap:12, fontFamily:"'DM Sans',system-ui,sans-serif" }}>
-
-      {/* Header */}
-      <div style={{ width:'100%', maxWidth:460, display:'flex', alignItems:'center', gap:12 }}>
-        <button onClick={onBack} style={{ padding:'8px 12px', borderRadius:8, border:`1px solid ${C.border}`, background:C.surface, fontSize:12, color:C.muted, cursor:'pointer' }}>← Resultados</button>
-        <div style={{ flex:1, textAlign:'center' }}>
-          <div style={{ fontSize:12, letterSpacing:2, textTransform:'uppercase', color:C.muted, fontWeight:500 }}>Practicar errores</div>
-          <div style={{ ...mono, fontSize:18, fontWeight:700, color:C.text, marginTop:2 }}>{idx+1} / {puzzles.length}</div>
-        </div>
-        <button onClick={onNext} style={{ padding:'8px 12px', borderRadius:8, border:`1px solid ${C.border}`, background:C.surface, fontSize:12, color:C.muted, cursor:'pointer' }}>Saltar →</button>
-      </div>
-
-      {/* Tags */}
-      <div style={{ width:'100%', maxWidth:460, display:'flex', gap:6, flexWrap:'wrap' }}>
-        <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, fontWeight:500 }}>{puzzle.theme}</span>
-        <span style={{ ...mono, fontSize:11, background:C.amberBg, color:C.amber, padding:'3px 10px', borderRadius:20, fontWeight:500 }}>ELO {puzzle.rating}</span>
-        <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, fontWeight:500 }}>{currentTurn==='white'?'Blancas':'Negras'} juegan</span>
-        {attempts > 0 && <span style={{ ...mono, fontSize:11, background:C.redBg, color:C.red, padding:'3px 10px', borderRadius:20, fontWeight:500 }}>{attempts} intento{attempts>1?'s':''}</span>}
+  // ── Board area: tags + tablero + feedback strip (mismo shape que GameScreen)
+  const boardWidth = desktop ? '580px' : undefined
+  const boardArea = (
+    <div style={{ flex: desktop ? '0 0 auto' : undefined, width: boardWidth ?? '100%' }}>
+      {/* Tags — mismo orden y estilo que GameScreen */}
+      <div style={{
+        display:'flex', flexWrap:'wrap', gap:6, marginBottom:10,
+        width:'100%', justifyContent: desktop ? 'flex-start' : 'center',
+      }}>
+        <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>{puzzle.theme}</span>
+        <span style={{ ...mono, fontSize:11, background:C.amberBg, color:C.amber, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.borderAm}`, whiteSpace:'nowrap' }}>ELO {puzzle.rating}</span>
+        <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>{currentTurn==='white'?'Blancas':'Negras'} juegan</span>
+        <span style={{ ...mono, fontSize:10, background:C.surface, color:C.faint, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>#{puzzle.id}</span>
       </div>
 
       {/* Board */}
-      <div style={{ width:'100%', maxWidth:460, borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
-        {currentFen && <ChessBoard key={puzzle.id} fen={currentFen} orientation={puzzle.turn} turn={currentTurn} dests={dests} onMove={handleMove} feedback={feedback} showDests />}
+      <div style={{ position:'relative', borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
+        {currentFen && (
+          <ChessBoard key={puzzle.id} fen={currentFen} orientation={puzzle.turn} turn={currentTurn}
+            dests={dests} onMove={handleMove} feedback={feedback} showDests />
+        )}
       </div>
 
-      {/* Feedback */}
-      <div style={{ width:'100%', maxWidth:460, padding:'10px 16px', borderRadius:10, background:fbBg, transition:'background .25s', minHeight:42, display:'flex', alignItems:'center', justifyContent:'center' }}>
-        <span style={{ fontSize:13, fontWeight:500, color:fbColor, textAlign:'center' }}>{fbText}</span>
+      {/* Feedback strip */}
+      <div style={{ marginTop:10, padding:fbBg!=='transparent'?'8px 16px':'4px 0', borderRadius:10, background:fbBg, fontSize:13, fontWeight:fbBg!=='transparent'?500:400, color:fbColor, transition:'all .2s', minHeight:36, display:'flex', alignItems:'center', gap:8, justifyContent:'center' }}>
+        {fbText}
       </div>
+    </div>
+  )
 
+  // ── Side panel: card de modo + intentos + botones + back ────────────────
+  const reviewCard = (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '24px 28px' : '14px 20px', textAlign:'center' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.muted, marginBottom: desktop ? 8 : 4 }}>Practicar errores</div>
+      <div style={{ ...mono, fontSize: desktop ? 56 : 36, fontWeight:700, color:C.amber, lineHeight:1, letterSpacing:-2 }}>
+        {idx+1} <span style={{ color:C.muted }}>/</span> {puzzles.length}
+      </div>
+    </div>
+  )
+
+  const attemptsCard = attempts > 0 && (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+      <span style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted }}>Intentos</span>
+      <span style={{ ...mono, fontSize: desktop ? 24 : 18, fontWeight:700, color: C.red }}>
+        {attempts}
+      </span>
+    </div>
+  )
+
+  // Botones primarios — mismo estilo que los de Práctica en GameScreen
+  const actionButtons = (
+    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+      <button onClick={handleRetry}
+        style={{ width:'100%', padding:'12px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:500, cursor:'pointer' }}>
+        Intentar de nuevo
+      </button>
+      <button onClick={onNext}
+        style={{ width:'100%', padding:'14px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.text, fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:500, cursor:'pointer' }}>
+        Saltar →
+      </button>
+    </div>
+  )
+
+  const sidePanel = (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', gap: desktop ? 20 : 12, minWidth:0 }}>
+      {reviewCard}
+      {attemptsCard}
+      {actionButtons}
+      {/* Back to results — empujado al fondo en desktop, mismo lugar que "Terminar sesión" */}
+      {desktop && <div style={{ flex:1 }} />}
+      <button onClick={onBack}
+        style={{ ...mono, fontSize:10, letterSpacing:2, textTransform:'uppercase', color:C.muted, cursor:'pointer', background:'none', border:'none', paddingTop:4, textAlign:'center' }}>
+        ← Resultados
+      </button>
+    </div>
+  )
+
+  // Toggle de sonido — esquina superior derecha, igual que GameScreen
+  const soundToggle = (
+    <button
+      onClick={() => setSoundOn(toggleSound())}
+      title={soundOn ? 'Sonido activado' : 'Sonido desactivado'}
+      style={{
+        position:'absolute', top: desktop ? 16 : 12, right: desktop ? 16 : 12, zIndex: 5,
+        width:32, height:32, borderRadius:8, padding:0, cursor:'pointer',
+        background:'transparent', border:`1px solid ${C.border}`,
+        color: soundOn ? C.amber : C.muted,
+        display:'flex', alignItems:'center', justifyContent:'center',
+      }}>
+      {soundOn ? (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M3 6V10H5L8 12.5V3.5L5 6H3Z" fill="currentColor"/>
+          <path d="M10.5 5C11.5 5.8 11.5 10.2 10.5 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+        </svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M3 6V10H5L8 12.5V3.5L5 6H3Z" fill="currentColor"/>
+          <line x1="11" y1="5" x2="14" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="14" y1="5" x2="11" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+        </svg>
+      )}
+    </button>
+  )
+
+  return (
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent: desktop ? 'center' : 'flex-start', padding: desktop ? '40px 48px' : '16px 16px 24px', fontFamily:"'DM Sans',system-ui,sans-serif", position:'relative' }}>
+      {soundToggle}
+      <div style={{
+        width:'100%',
+        maxWidth: desktop ? 940 : 460,
+        display:'flex',
+        flexDirection: desktop ? 'row' : 'column',
+        alignItems: desktop ? 'flex-start' : 'center',
+        gap: desktop ? 28 : 12,
+      }}>
+        {desktop ? <>{boardArea}{sidePanel}</> : <>{sidePanel}{boardArea}</>}
+      </div>
     </div>
   )
 }
