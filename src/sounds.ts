@@ -38,7 +38,9 @@ type SoundKey = 'move' | 'correct' | 'wrong' | 'notify'
 const SOUND_FILES: Record<SoundKey, string> = {
   move:    '/sounds/Move.mp3',
   correct: '/sounds/GenericNotify.mp3',
-  wrong:   '/sounds/Error.mp3',
+  // OutOfBound — un "thud" más marcado que Error.mp3 (era un blip bajo
+  // que se confundía con el buzz sintético anterior).
+  wrong:   '/sounds/OutOfBound.mp3',
   notify:  '/sounds/GenericNotify.mp3',
 }
 
