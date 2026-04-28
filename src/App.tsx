@@ -2302,6 +2302,7 @@ export default function App() {
   const warnedRef    = useRef(false)  // aviso de 30s — disparar solo una vez por sesión
   const skipPushRef  = useRef(false)  // popstate → no rebobinar el push de history
   const lastStateRef = useRef<AppState>('init')  // para detectar transiciones automáticas
+  const deadlineRef  = useRef<number | null>(null)  // wall-clock: cuándo termina el Storm
 
   // Cuando carga un puzzle nuevo, resetear posición
   useEffect(() => {
@@ -2441,8 +2442,14 @@ export default function App() {
         getBestScores(supaUser.id, 'streak').then(s => mounted && setBestStreaks(s)).catch(() => {})
         setAuthUser(built)
         setIsGuest(false)
-        setAppState('config')
+        // Solo redirigimos a config en el login inicial. El SDK de Supabase
+        // dispara TOKEN_REFRESHED / SIGNED_IN cuando el usuario vuelve a la
+        // pestaña tras un rato (por refresh automático del access token); si
+        // forzáramos config, abortaríamos cualquier Streak/Storm/Práctica en
+        // curso. Solo permitimos la redirección desde init/login (arranque).
+        setAppState(prev => (prev === 'init' || prev === 'login') ? 'config' : prev)
       } else {
+        // Logout: ir siempre a login, sin importar dónde estábamos
         setAuthUser(null)
         setAppState('login')
       }
@@ -2463,21 +2470,46 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Storm timer (solo modo Storm). Pausa si la sección activa no es Entrenar
-  // (o sea, si el usuario navegó a Pájaro Carpintero / Análisis durante el juego).
+  // Storm timer (solo modo Storm). Usa un deadline absoluto en lugar de
+  // contar ticks: los browsers throttlean setInterval cuando la pestaña está
+  // en background (a veces hasta 1 vez por minuto), así que un counter por
+  // ticks se atrasaría. Con deadline + recompute en cada tick + sync al
+  // recuperar foco, el wall-clock siempre coincide con el real (estilo
+  // Lichess: cambiar de pestaña no pausa el timer).
   useEffect(() => {
-    if (mode !== 'storm' || appState !== 'storm' || screen !== 'storm' || section !== 'train' || !timerStarted) return
-    timerRef.current = setInterval(() => {
-      setTimeLeft(t => {
-        const next = t - 1
-        // Aviso de 30 segundos — disparar UNA sola vez por sesión
-        if (next === 30 && !warnedRef.current) { warnedRef.current = true; playWarning() }
-        if (t <= 1) { clearInterval(timerRef.current!); endSessRef.current(); return 0 }
-        return next
-      })
-    }, 1000)
-    return () => clearInterval(timerRef.current!)
-  }, [mode, appState, section, screen, timerStarted])
+    if (mode !== 'storm' || appState !== 'storm' || screen !== 'storm' || !timerStarted) return
+
+    // Primer disparo del timer en esta sesión: fijar deadline en base a timeLeft.
+    if (deadlineRef.current === null) {
+      deadlineRef.current = Date.now() + timeLeft * 1000
+    }
+
+    const tick = () => {
+      if (deadlineRef.current === null) return
+      const remaining = Math.max(0, Math.round((deadlineRef.current - Date.now()) / 1000))
+      setTimeLeft(remaining)
+      // Aviso de 30 segundos — disparar UNA sola vez por sesión
+      if (remaining === 30 && !warnedRef.current) { warnedRef.current = true; playWarning() }
+      if (remaining <= 0) {
+        clearInterval(timerRef.current!)
+        endSessRef.current()
+      }
+    }
+
+    timerRef.current = setInterval(tick, 1000)
+    // Al recuperar foco sincronizamos inmediatamente: si la pestaña estuvo
+    // en background, el setInterval pudo haberse atrasado varios segundos.
+    const onVisible = () => { if (!document.hidden) tick() }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      clearInterval(timerRef.current!)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  // timeLeft no entra en deps — lo usamos solo para el cálculo inicial del
+  // deadline. Si lo metiéramos, el effect se re-correría cada segundo.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, appState, screen, timerStarted])
 
   const loadNext = useCallback(async () => {
     setLoading(true); setFetchError(null)
@@ -2590,6 +2622,7 @@ export default function App() {
     setScoreOk(0); setScoreErr(0); setFeedback('idle'); setHistory([])
     setAttempts(0); setStreakBreaker(null); setHintLevel(0); setSolving(false)
     warnedRef.current = false
+    deadlineRef.current = null  // se setea cuando timerStarted pasa a true
     seenIds.current = []
     sessionStart.current = new Date().toISOString()
     setScreen('storm')
@@ -2707,16 +2740,18 @@ export default function App() {
     setAppState('dashboard'); setScreen('storm')
   }, [])
 
-  // Click en una sección del nav: si es Entrenar, siempre volvemos al config
-  // (incluso desde el dashboard o coming-soon). Para Pájaro Carpintero / Análisis
-  // solo cambiamos la sección.
+  // Click en una sección del nav. Si vamos a Entrenar:
+  //  - Si hay una sesión activa (preparing/storm/review), preservarla — el
+  //    usuario sigue en su juego donde lo dejó. La única forma de salir es
+  //    "Terminar sesión" o que el timer de Storm llegue a cero.
+  //  - Si NO hay sesión (dashboard/results/coming-soon), llevar a config.
   const handleSection = useCallback((s: Section) => {
-    if (s === 'train') {
-      clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
-      setAppState('config'); setScreen('storm')
-    }
     setSection(s)
-  }, [])
+    if (s !== 'train') return
+    if (appState === 'preparing' || appState === 'storm' || appState === 'review') return
+    clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
+    setAppState('config'); setScreen('storm')
+  }, [appState])
 
   const logout = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
