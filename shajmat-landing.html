@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shajmat — Entrenamiento Táctico</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0e0d0b; color: #f7f4ef; font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; }
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 48px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .logo-wrap { display: flex; align-items: center; gap: 12px; }
+  .wordmark { font-family: 'Cinzel', serif; font-size: 16px; font-weight: 700; letter-spacing: 5px; color: #f7f4ef; }
+  .btn-solid { background: #c17f2a; color: #0e0d0b; font-family: 'DM Sans', sans-serif; font-weight: 700; border: none; border-radius: 4px; cursor: pointer; letter-spacing: 0.3px; transition: background 0.15s; }
+  .btn-solid:hover { background: #d4902f; }
+  .btn-outline { background: transparent; color: #c17f2a; font-family: 'DM Sans', sans-serif; font-weight: 600; border: 1.5px solid #c17f2a; border-radius: 4px; cursor: pointer; letter-spacing: 0.3px; transition: background 0.15s; }
+  .btn-outline:hover { background: rgba(193,127,42,0.08); }
+  .btn-sm { font-size: 13px; padding: 9px 20px; }
+  .btn-lg { font-size: 16px; padding: 15px 36px; }
+  .nav-ctas { display: flex; gap: 12px; }
+  .hero { padding: 110px 48px 90px; max-width: 800px; margin: 0 auto; text-align: center; }
+  .eyebrow { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 5px; color: #c17f2a; text-transform: uppercase; margin-bottom: 28px; }
+  .hero h1 { font-family: 'Cinzel', serif; font-size: clamp(28px, 4.5vw, 48px); font-weight: 700; line-height: 1.2; color: #f7f4ef; margin-bottom: 32px; }
+  .hero h1 em { font-style: normal; color: #c17f2a; }
+  .hook { font-size: 19px; color: rgba(247,244,239,0.55); line-height: 1.75; max-width: 560px; margin: 0 auto 52px; font-weight: 300; }
+  .hook strong { color: #f7f4ef; font-weight: 500; }
+  .cta-group { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; }
+  hr { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 0 48px; }
+  .problem { padding: 90px 48px; max-width: 700px; margin: 0 auto; }
+  .section-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 4px; color: rgba(247,244,239,0.28); text-transform: uppercase; margin-bottom: 40px; }
+  .problem-quote { font-size: clamp(19px, 2.8vw, 26px); line-height: 1.6; color: rgba(247,244,239,0.85); font-weight: 300; border-left: 2px solid #c17f2a; padding-left: 28px; margin-bottom: 22px; }
+  .problem-sub { font-size: 13px; color: rgba(247,244,239,0.32); font-family: 'DM Mono', monospace; padding-left: 30px; letter-spacing: 0.3px; line-height: 1.7; }
+  .features { padding: 70px 48px 90px; max-width: 700px; margin: 0 auto; }
+  .feat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
+  .feat-item { background: #0e0d0b; padding: 30px 26px; transition: background 0.15s; }
+  .feat-item:hover { background: #1b1915; }
+  .feat-dot { width: 5px; height: 5px; background: #c17f2a; border-radius: 50%; margin-bottom: 16px; }
+  .feat-title { font-size: 13px; font-weight: 600; color: #f7f4ef; margin-bottom: 8px; letter-spacing: 0.3px; }
+  .feat-desc { font-size: 13px; color: rgba(247,244,239,0.38); line-height: 1.65; font-weight: 300; }
+  .bottom { padding: 90px 48px; text-align: center; border-top: 1px solid rgba(255,255,255,0.06); }
+  .bottom-title { font-family: 'Cinzel', serif; font-size: 26px; font-weight: 700; color: #f7f4ef; margin-bottom: 12px; }
+  .bottom-sub { font-size: 14px; color: rgba(247,244,239,0.38); margin-bottom: 36px; font-weight: 300; }
+  .shin { font-family: 'Cinzel', serif; font-size: 11px; color: rgba(193,127,42,0.18); margin-top: 52px; user-select: none; display: block; }
+
+  /* OVERLAY GENÉRICO */
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(14,13,11,0.85); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+  .overlay.active { display: flex; }
+
+  /* MODAL INICIO */
+  .modal { background: #1b1915; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 40px 36px; max-width: 360px; width: 100%; text-align: center; }
+  .modal-mark { margin: 0 auto 20px; display: block; }
+  .modal-title { font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; color: #f7f4ef; margin-bottom: 10px; letter-spacing: 2px; }
+  .modal-sub { font-size: 13px; color: rgba(247,244,239,0.4); line-height: 1.65; margin-bottom: 28px; font-weight: 300; }
+  .modal-actions { display: flex; flex-direction: column; gap: 10px; }
+  .btn-google { display: flex; align-items: center; justify-content: center; gap: 10px; background: #c17f2a; color: #0e0d0b; font-family: 'DM Sans', sans-serif; font-weight: 700; font-size: 15px; padding: 14px 24px; border: none; border-radius: 4px; cursor: pointer; width: 100%; transition: background 0.15s; }
+  .btn-google:hover { background: #d4902f; }
+  .btn-guest { background: transparent; color: rgba(247,244,239,0.35); font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 10px; border: none; cursor: pointer; transition: color 0.15s; width: 100%; }
+  .btn-guest:hover { color: rgba(247,244,239,0.65); }
+  .modal-note { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(247,244,239,0.15); margin-top: 18px; letter-spacing: 0.5px; }
+
+  /* PROMPT POST-SESIÓN */
+  .prompt-overlay { display: none; position: fixed; inset: 0; background: rgba(14,13,11,0.7); z-index: 100; align-items: flex-end; justify-content: center; padding: 24px; }
+  .prompt-overlay.active { display: flex; }
+  .prompt-card { background: #1b1915; border: 1px solid rgba(193,127,42,0.3); border-radius: 8px; padding: 28px 28px 24px; max-width: 400px; width: 100%; margin-bottom: 12px; }
+  .prompt-tag { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 3px; color: #c17f2a; text-transform: uppercase; margin-bottom: 10px; }
+  .prompt-title { font-size: 16px; font-weight: 600; color: #f7f4ef; margin-bottom: 8px; line-height: 1.4; }
+  .prompt-sub { font-size: 13px; color: rgba(247,244,239,0.4); line-height: 1.6; margin-bottom: 22px; font-weight: 300; }
+  .prompt-actions { display: flex; align-items: center; gap: 16px; }
+  .btn-prompt-solid { display: flex; align-items: center; gap: 8px; background: #c17f2a; color: #0e0d0b; font-family: 'DM Sans', sans-serif; font-weight: 700; font-size: 13px; padding: 11px 20px; border: none; border-radius: 4px; cursor: pointer; transition: background 0.15s; }
+  .btn-prompt-solid:hover { background: #d4902f; }
+  .btn-prompt-skip { background: transparent; color: rgba(247,244,239,0.32); font-family: 'DM Sans', sans-serif; font-size: 13px; border: none; cursor: pointer; padding: 11px 0; transition: color 0.15s; }
+  .btn-prompt-skip:hover { color: rgba(247,244,239,0.6); }
+
+  @media (max-width: 600px) {
+    nav { padding: 16px 20px; }
+    .nav-ctas .btn-outline { display: none; }
+    .hero { padding: 70px 20px 60px; }
+    hr { margin: 0 20px; }
+    .problem, .features, .bottom { padding-left: 20px; padding-right: 20px; }
+    .feat-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- MODAL: EMPEZAR -->
+<div class="overlay" id="startModal">
+  <div class="modal">
+    <svg class="modal-mark" viewBox="0 0 72 90" width="36" height="45" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="77" width="52" height="4.5" rx="2.25" fill="#c17f2a"/>
+      <path d="M22 77 C22 56, 14 38, 9 26 Q7 18 12 16" stroke="#c17f2a" stroke-width="5" stroke-linecap="round"/>
+      <line x1="36" y1="77" x2="36" y2="8" stroke="#c17f2a" stroke-width="5" stroke-linecap="round"/>
+      <path d="M50 77 C50 56, 58 38, 63 26 Q65 18 60 16" stroke="#c17f2a" stroke-width="5" stroke-linecap="round"/>
+    </svg>
+    <p class="modal-title">SHAJMAT</p>
+    <p class="modal-sub">Entrá con Google para guardar tu progreso y ver métricas de tu mejora. O empezá a jugar directo.</p>
+    <div class="modal-actions">
+      <button class="btn-google" onclick="closeModal('startModal')">
+        <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+        </svg>
+        Entrar con Google
+      </button>
+      <button class="btn-guest" onclick="closeModal('startModal')">Continuar sin cuenta →</button>
+    </div>
+    <p class="modal-note">El login toma menos de 10 segundos</p>
+  </div>
+</div>
+
+<!-- PROMPT: POST-SESIÓN -->
+<div class="prompt-overlay" id="progressPrompt">
+  <div class="prompt-card">
+    <p class="prompt-tag">Tu progreso no está guardado</p>
+    <p class="prompt-title">¿Querés ver tus métricas de mejora?</p>
+    <p class="prompt-sub">Llevás 2 sesiones entrenadas. Entrá con Google — tarda menos de 10 segundos — y vas a poder ver tu curva de mejora, mejores scores y los temas donde más errás.</p>
+    <div class="prompt-actions">
+      <button class="btn-prompt-solid" onclick="closeModal('progressPrompt')">
+        <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+        </svg>
+        Entrar con Google
+      </button>
+      <button class="btn-prompt-skip" onclick="closeModal('progressPrompt')">Ahora no</button>
+    </div>
+  </div>
+</div>
+
+<!-- LANDING -->
+<nav>
+  <div class="logo-wrap">
+    <svg viewBox="0 0 72 90" width="28" height="35" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="77" width="52" height="4.5" rx="2.25" fill="#c17f2a"/>
+      <path d="M22 77 C22 56, 14 38, 9 26 Q7 18 12 16" stroke="#c17f2a" stroke-width="5" stroke-linecap="round"/>
+      <line x1="36" y1="77" x2="36" y2="8" stroke="#c17f2a" stroke-width="5" stroke-linecap="round"/>
+      <path d="M50 77 C50 56, 58 38, 63 26 Q65 18 60 16" stroke="#c17f2a" stroke-width="5" stroke-linecap="round"/>
+    </svg>
+    <span class="wordmark">SHAJMAT</span>
+  </div>
+  <div class="nav-ctas">
+    <button class="btn-solid btn-sm" onclick="openModal('startModal')">Empezar a entrenar</button>
+    <button class="btn-outline btn-sm" onclick="openModal('startModal')">Ya tengo cuenta</button>
+  </div>
+</nav>
+
+<section class="hero">
+  <p class="eyebrow">Entrenamiento Táctico</p>
+  <h1>Las herramientas de entrenamiento táctico que ya conocés, <em>mejoradas</em></h1>
+  <p class="hook">Si podés resolver 30 ejercicios del Streak sin equivocarte, <strong>no te estás desafiando</strong>. Y si no te desafiás, no mejorás.</p>
+  <div class="cta-group">
+    <button class="btn-solid btn-lg" onclick="openModal('startModal')">Empezar a entrenar</button>
+    <button class="btn-outline btn-lg" onclick="openModal('startModal')">Ya tengo cuenta</button>
+  </div>
+</section>
+
+<hr>
+
+<section class="problem">
+  <p class="section-label">El problema</p>
+  <p class="problem-quote">Puzzle Storm y Streak son geniales. Pero siempre arrancan fácil, y no te dejan elegir qué tipo de táctica entrenar.</p>
+  <p class="problem-sub">Si pasás entre 1 y 2 minutos del Storm resolviendo ejercicios demasiado fáciles, estás desperdiciando entre el 30% y el 60% de tu entrenamiento.</p>
+</section>
+
+<hr>
+
+<section class="features">
+  <p class="section-label">Qué cambia</p>
+  <div class="feat-grid">
+    <div class="feat-item">
+      <div class="feat-dot"></div>
+      <p class="feat-title">Nivel fijo desde el principio</p>
+      <p class="feat-desc">Sin regalos. Elegís tu rango de ELO y cada ejercicio está dentro de ese rango.</p>
+    </div>
+    <div class="feat-item">
+      <div class="feat-dot"></div>
+      <p class="feat-title">Filtros combinados</p>
+      <p class="feat-desc">Tema + apertura + nivel al mismo tiempo. Entrenás exactamente lo que querés trabajar.</p>
+    </div>
+    <div class="feat-item">
+      <div class="feat-dot"></div>
+      <p class="feat-title">Calibrado a tu ELO de Lichess</p>
+      <p class="feat-desc">Conectás tu cuenta y los ejercicios se adaptan a tu nivel real.</p>
+    </div>
+    <div class="feat-item">
+      <div class="feat-dot"></div>
+      <p class="feat-title">Storm, Streak y Práctica</p>
+      <p class="feat-desc">Los modos que ya conocés, con los filtros que siempre quisiste. Más modos en camino.</p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<section class="bottom">
+  <p class="bottom-title">Empezá a entrenar en serio</p>
+  <p class="bottom-sub">100% gratis. Conectá tu cuenta de Lichess para calibrar tu nivel.</p>
+  <div class="cta-group">
+    <button class="btn-solid btn-lg" onclick="openModal('startModal')">Empezar a entrenar</button>
+    <button class="btn-outline btn-lg" onclick="openModal('startModal')">Ya tengo cuenta</button>
+  </div>
+  <span class="shin">ש</span>
+</section>
+
+<!-- Demo del prompt post-sesión — clic para verlo -->
+<div style="position:fixed;bottom:20px;right:20px;z-index:50;">
+  <button onclick="openModal('progressPrompt')" style="background:#232018;color:rgba(247,244,239,0.4);font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;border:1px solid rgba(255,255,255,0.08);border-radius:4px;padding:8px 14px;cursor:pointer;">
+    demo: prompt post-sesión
+  </button>
+</div>
+
+<script>
+  function openModal(id) { document.getElementById(id).classList.add('active'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+  document.querySelectorAll('.overlay, .prompt-overlay').forEach(el => {
+    el.addEventListener('click', e => { if (e.target === el) el.classList.remove('active'); });
+  });
+</script>
+
+</body>
+</html>

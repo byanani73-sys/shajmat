@@ -2072,6 +2072,68 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
 }
 
 
+// ─── Prompt post-sesión: invita al usuario sin cuenta a guardar progreso ──
+//
+// Se renderiza por encima de la pantalla actual cuando: el usuario completó
+// 2+ sesiones (counter en localStorage) y NO está logueado. El click en
+// "Ahora no" lo cierra y queda dismissed por el resto de la pestaña
+// (sessionStorage).
+function PostSessionPrompt({ onDismiss }: { onDismiss: () => void }) {
+  const [signing, setSigning] = useState(false)
+  const handleGoogle = async () => {
+    setSigning(true)
+    try { await signInWithGoogle() }
+    catch { setSigning(false) }
+  }
+  return (
+    <div onClick={e => { if (e.target === e.currentTarget) onDismiss() }}
+      style={{
+        position:'fixed', inset:0, background:'rgba(14,13,11,0.7)', zIndex:200,
+        display:'flex', alignItems:'flex-end', justifyContent:'center', padding:24,
+        fontFamily:"'DM Sans', sans-serif",
+      }}>
+      <div style={{
+        background:'#1b1915', border:'1px solid rgba(193,127,42,0.3)',
+        borderRadius:8, padding:'28px 28px 24px', maxWidth:400, width:'100%',
+        marginBottom:12,
+      }}>
+        <p style={{ ...mono, fontSize:9, letterSpacing:3, color:C.amber, textTransform:'uppercase', marginBottom:10 }}>
+          Tu progreso no está guardado
+        </p>
+        <p style={{ fontSize:16, fontWeight:600, color:C.text, marginBottom:8, lineHeight:1.4 }}>
+          ¿Querés ver tus métricas de mejora?
+        </p>
+        <p style={{ fontSize:13, color:'rgba(247,244,239,0.4)', lineHeight:1.6, marginBottom:22, fontWeight:300 }}>
+          Llevás 2 sesiones entrenadas. Entrá con Google — tarda menos de 10 segundos — y vas a poder ver tu curva de mejora, mejores scores y los temas donde más errás.
+        </p>
+        <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+          <button onClick={handleGoogle} disabled={signing}
+            style={{
+              display:'flex', alignItems:'center', gap:8, background:C.amber, color:C.bg,
+              fontFamily:"'DM Sans', sans-serif", fontWeight:700, fontSize:13,
+              padding:'11px 20px', border:'none', borderRadius:4,
+              cursor: signing ? 'default' : 'pointer', opacity: signing ? 0.6 : 1,
+            }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+            </svg>
+            {signing ? 'Conectando…' : 'Entrar con Google'}
+          </button>
+          <button onClick={onDismiss}
+            style={{
+              background:'transparent', color:'rgba(247,244,239,0.32)',
+              fontFamily:"'DM Sans', sans-serif", fontSize:13, border:'none',
+              cursor:'pointer', padding:'11px 0',
+            }}>Ahora no</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ResultsScreen({ mode, minutes, scoreOk, scoreErr, history, bestScores, streakBreaker, onRepeat, onReview, onConfig }: {
   mode:Mode
   minutes:number; scoreOk:number; scoreErr:number
@@ -2291,6 +2353,11 @@ export default function App() {
   const [streakBreaker, setStreakBreaker] = useState<HistoryEntry|null>(null)
   const [hintLevel,   setHintLevel]   = useState<0|1|2>(0)
   const [solving,     setSolving]     = useState(false)
+  // Prompt post-sesión: lo cerramos por el resto de la pestaña al primer
+  // "Ahora no". Si el usuario refresca, vuelve a aparecer (cuando aplique).
+  const [promptDismissed, setPromptDismissed] = useState(() =>
+    typeof window !== 'undefined' && sessionStorage.getItem('shajmat_prompt_dismissed') === '1'
+  )
 
   const timerRef    = useRef<ReturnType<typeof setInterval>|null>(null)
   const nextRef     = useRef<ReturnType<typeof setTimeout>|null>(null)
@@ -2303,6 +2370,7 @@ export default function App() {
   const skipPushRef  = useRef(false)  // popstate → no rebobinar el push de history
   const lastStateRef = useRef<AppState>('init')  // para detectar transiciones automáticas
   const deadlineRef  = useRef<number | null>(null)  // wall-clock: cuándo termina el Storm
+  const initialLoadRef = useRef(true)               // primer pase del auth check
 
   // Cuando carga un puzzle nuevo, resetear posición
   useEffect(() => {
@@ -2419,6 +2487,13 @@ export default function App() {
   useEffect(() => {
     let mounted = true
 
+    // Si el usuario llegó desde la landing apretando "Continuar sin cuenta",
+    // saltamos el LoginScreen y entramos directo a config como invitado.
+    // El flag se consume una sola vez (lo borramos acá).
+    const guestIntent = typeof window !== 'undefined'
+      && sessionStorage.getItem('shajmat_guest_intent') === '1'
+    if (guestIntent) sessionStorage.removeItem('shajmat_guest_intent')
+
     const processUser = async (supaUser: User | null) => {
       if (!mounted) return
       if (supaUser) {
@@ -2449,10 +2524,18 @@ export default function App() {
         // curso. Solo permitimos la redirección desde init/login (arranque).
         setAppState(prev => (prev === 'init' || prev === 'login') ? 'config' : prev)
       } else {
-        // Logout: ir siempre a login, sin importar dónde estábamos
+        // Sin usuario. Distinguimos arranque (initialLoadRef.current=true)
+        // vs logout posterior. En arranque con guestIntent entramos directo
+        // a config como invitado; sin guestIntent o tras logout, login.
         setAuthUser(null)
-        setAppState('login')
+        if (initialLoadRef.current && guestIntent) {
+          setIsGuest(true)
+          setAppState('config')
+        } else {
+          setAppState('login')
+        }
       }
+      initialLoadRef.current = false
     }
 
     // Esperar a que Supabase termine de detectar la sesión (URL hash u localStorage)
@@ -2654,6 +2737,16 @@ export default function App() {
   const endSess = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
     setScreen('results')
+
+    // Contador de sesiones de invitado en localStorage — gatilla el prompt
+    // post-sesión que ofrece guardar el progreso con Google después de la
+    // segunda partida. No incrementamos para usuarios logueados (se guarda
+    // en Supabase) ni en práctica si quisiéramos exclluirla (acá la
+    // contamos también para coherencia con el resto de los modos).
+    if (!authUser || isGuest) {
+      const cur = parseInt(localStorage.getItem('shajmat_guest_sessions') ?? '0', 10) || 0
+      localStorage.setItem('shajmat_guest_sessions', String(cur + 1))
+    }
 
     if (authUser && !isGuest) {
       const groups = buildFiltersFromSelection(selectedThemes, selectedOpenings)
@@ -2908,9 +3001,25 @@ export default function App() {
     )
   }
 
+  // Prompt post-sesión: lo mostramos solo en results, para usuarios sin
+  // cuenta logueada que ya hicieron 2+ sesiones (counter en localStorage,
+  // incrementado en endSess). Se dismissea por el resto de la pestaña.
+  const guestSessionCount = typeof window !== 'undefined'
+    ? (parseInt(localStorage.getItem('shajmat_guest_sessions') ?? '0', 10) || 0)
+    : 0
+  const showPostSessionPrompt =
+    appState === 'results' && !authUser && !promptDismissed && guestSessionCount >= 2
+  const dismissPrompt = () => {
+    sessionStorage.setItem('shajmat_prompt_dismissed', '1')
+    setPromptDismissed(true)
+  }
+
   return (
-    <NavLayout section={section} onSection={handleSection} variant={navVariant} user={authUser ?? undefined} onLogout={logout}>
-      {inner}
-    </NavLayout>
+    <>
+      <NavLayout section={section} onSection={handleSection} variant={navVariant} user={authUser ?? undefined} onLogout={logout}>
+        {inner}
+      </NavLayout>
+      {showPostSessionPrompt && <PostSessionPrompt onDismiss={dismissPrompt} />}
+    </>
   )
 }

@@ -28,10 +28,13 @@ export async function signInWithEmail(email: string, password: string): Promise<
 }
 
 // ── Google OAuth ───────────────────────────────────────────────────────────
+// Tras el callback el usuario aterriza directamente en /entrenar (la app),
+// no en / (la landing). Así App.tsx procesa el hash de OAuth y arranca
+// la sesión sin pasar por la landing.
 export async function signInWithGoogle(): Promise<void> {
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin },
+    options: { redirectTo: `${window.location.origin}/entrenar` },
   })
   if (error) throw error
 }
@@ -113,7 +116,7 @@ const LICHESS_CLIENT_ID = 'shajmat'
 const PKCE_STORAGE_KEY  = 'shajmat_pkce_verifier'
 
 function getLichessRedirect(): string {
-  return `${window.location.origin}/lichess-callback`
+  return `${window.location.origin}/entrenar`
 }
 
 function generateRandomString(length = 64): string {

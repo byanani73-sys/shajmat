@@ -1,0 +1,68 @@
+/* Landing page de Shajmat — diseño tomado de shajmat-landing.html.
+   Convertido a CSS standalone para que no se mezcle con los estilos
+   inline de App.tsx (la app sigue rendereando todo via React inline-style). */
+
+.landing { background: #0e0d0b; color: #f7f4ef; font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+
+.landing nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 48px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.landing .logo-wrap { display: flex; align-items: center; gap: 12px; }
+.landing .wordmark { font-family: 'Cinzel', serif; font-size: 16px; font-weight: 700; letter-spacing: 5px; color: #f7f4ef; }
+
+.landing .btn-solid { background: #c17f2a; color: #0e0d0b; font-family: 'DM Sans', sans-serif; font-weight: 700; border: none; border-radius: 4px; cursor: pointer; letter-spacing: 0.3px; transition: background 0.15s; }
+.landing .btn-solid:hover { background: #d4902f; }
+.landing .btn-outline { background: transparent; color: #c17f2a; font-family: 'DM Sans', sans-serif; font-weight: 600; border: 1.5px solid #c17f2a; border-radius: 4px; cursor: pointer; letter-spacing: 0.3px; transition: background 0.15s; }
+.landing .btn-outline:hover { background: rgba(193,127,42,0.08); }
+.landing .btn-sm { font-size: 13px; padding: 9px 20px; }
+.landing .btn-lg { font-size: 16px; padding: 15px 36px; }
+.landing .nav-ctas { display: flex; gap: 12px; }
+
+.landing .hero { padding: 110px 48px 90px; max-width: 800px; margin: 0 auto; text-align: center; }
+.landing .eyebrow { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 5px; color: #c17f2a; text-transform: uppercase; margin-bottom: 28px; }
+.landing .hero h1 { font-family: 'Cinzel', serif; font-size: clamp(28px, 4.5vw, 48px); font-weight: 700; line-height: 1.2; color: #f7f4ef; margin-bottom: 32px; }
+.landing .hero h1 em { font-style: normal; color: #c17f2a; }
+.landing .hook { font-size: 19px; color: rgba(247,244,239,0.55); line-height: 1.75; max-width: 560px; margin: 0 auto 52px; font-weight: 300; }
+.landing .hook strong { color: #f7f4ef; font-weight: 500; }
+.landing .cta-group { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; }
+
+.landing hr { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 0 48px; }
+
+.landing .problem { padding: 90px 48px; max-width: 700px; margin: 0 auto; }
+.landing .section-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 4px; color: rgba(247,244,239,0.28); text-transform: uppercase; margin-bottom: 40px; }
+.landing .problem-quote { font-size: clamp(19px, 2.8vw, 26px); line-height: 1.6; color: rgba(247,244,239,0.85); font-weight: 300; border-left: 2px solid #c17f2a; padding-left: 28px; margin-bottom: 22px; }
+.landing .problem-sub { font-size: 13px; color: rgba(247,244,239,0.32); font-family: 'DM Mono', monospace; padding-left: 30px; letter-spacing: 0.3px; line-height: 1.7; }
+
+.landing .features { padding: 70px 48px 90px; max-width: 700px; margin: 0 auto; }
+.landing .feat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
+.landing .feat-item { background: #0e0d0b; padding: 30px 26px; transition: background 0.15s; }
+.landing .feat-item:hover { background: #1b1915; }
+.landing .feat-dot { width: 5px; height: 5px; background: #c17f2a; border-radius: 50%; margin-bottom: 16px; }
+.landing .feat-title { font-size: 13px; font-weight: 600; color: #f7f4ef; margin-bottom: 8px; letter-spacing: 0.3px; }
+.landing .feat-desc { font-size: 13px; color: rgba(247,244,239,0.38); line-height: 1.65; font-weight: 300; }
+
+.landing .bottom { padding: 90px 48px; text-align: center; border-top: 1px solid rgba(255,255,255,0.06); }
+.landing .bottom-title { font-family: 'Cinzel', serif; font-size: 26px; font-weight: 700; color: #f7f4ef; margin-bottom: 12px; }
+.landing .bottom-sub { font-size: 14px; color: rgba(247,244,239,0.38); margin-bottom: 36px; font-weight: 300; }
+.landing .shin { font-family: 'Cinzel', serif; font-size: 11px; color: rgba(193,127,42,0.18); margin-top: 52px; user-select: none; display: block; }
+
+/* OVERLAY GENÉRICO + MODAL INICIO */
+.landing .overlay { display: flex; position: fixed; inset: 0; background: rgba(14,13,11,0.85); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+.landing .modal { background: #1b1915; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 40px 36px; max-width: 360px; width: 100%; text-align: center; }
+.landing .modal-mark { margin: 0 auto 20px; display: block; }
+.landing .modal-title { font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; color: #f7f4ef; margin-bottom: 10px; letter-spacing: 2px; }
+.landing .modal-sub { font-size: 13px; color: rgba(247,244,239,0.4); line-height: 1.65; margin-bottom: 28px; font-weight: 300; }
+.landing .modal-actions { display: flex; flex-direction: column; gap: 10px; }
+.landing .btn-google { display: flex; align-items: center; justify-content: center; gap: 10px; background: #c17f2a; color: #0e0d0b; font-family: 'DM Sans', sans-serif; font-weight: 700; font-size: 15px; padding: 14px 24px; border: none; border-radius: 4px; cursor: pointer; width: 100%; transition: background 0.15s; }
+.landing .btn-google:hover { background: #d4902f; }
+.landing .btn-google[disabled] { opacity: 0.6; cursor: default; }
+.landing .btn-guest { background: transparent; color: rgba(247,244,239,0.35); font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 10px; border: none; cursor: pointer; transition: color 0.15s; }
+.landing .btn-guest:hover { color: rgba(247,244,239,0.65); }
+.landing .modal-note { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(247,244,239,0.15); margin-top: 18px; letter-spacing: 0.5px; }
+
+@media (max-width: 600px) {
+  .landing nav { padding: 16px 20px; }
+  .landing .nav-ctas .btn-outline { display: none; }
+  .landing .hero { padding: 70px 20px 60px; }
+  .landing hr { margin: 0 20px; }
+  .landing .problem, .landing .features, .landing .bottom { padding-left: 20px; padding-right: 20px; }
+  .landing .feat-grid { grid-template-columns: 1fr; }
+}
