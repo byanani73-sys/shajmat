@@ -140,6 +140,9 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      stockfish.js:
+        specifier: 10.0.2
+        version: 10.0.2
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.5.0
@@ -3222,6 +3225,9 @@ packages:
   sourcemap-codec@1.4.8:
     resolution: {integrity: sha512-9NykojV5Uih4lgo5So5dtw+f0JgJX30KCNI8gwhz2J9A15wD0Ml6tjHKwf6fTSa6fAdVBdZeNOs9eJ71qCk8vA==}
     deprecated: Please use @jridgewell/sourcemap-codec instead
+
+  stockfish.js@10.0.2:
+    resolution: {integrity: sha512-treB3AYcdvRJ9SDPOyL0R2NcEAtQgG432nStfRzR4wzVELGQ6iVoeBHwvirHTfocNOTims7XNkK3SADaocsJmQ==}
 
   stop-iteration-iterator@1.1.0:
     resolution: {integrity: sha512-eLoXW/DHyl62zxY4SCaIgnRhuMr6ri4juEYARS8E6sCEqzKpOiE521Ucofdx+KnDZl5xmvGYaaKCk5FEOxJCoQ==}
@@ -6794,6 +6800,8 @@ snapshots:
       whatwg-url: 7.1.0
 
   sourcemap-codec@1.4.8: {}
+
+  stockfish.js@10.0.2: {}
 
   stop-iteration-iterator@1.1.0:
     dependencies:

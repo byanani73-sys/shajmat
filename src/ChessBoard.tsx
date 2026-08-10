@@ -17,11 +17,23 @@ interface ChessBoardProps {
   // Hints: 0 = nada, 1 = círculo en origen, 2 = flecha origen→destino
   hintLevel?: 0 | 1 | 2
   hintMove?:  string  // UCI move tipo 'e2e4'
+  // Extra shapes (por ej. flecha de la mejor jugada del motor). Se dibujan
+  // junto con las de hint. Cambiar la referencia dispara re-render.
+  extraShapes?: DrawShape[]
+  // Bloquea input sin cambiar `movable.color` — útil mientras un selector
+  // de promoción está abierto y no queremos que el usuario mueva más piezas.
+  inputLocked?: boolean
+  // Cambiar este número fuerza al ChessBoard a re-sincronizar la posición
+  // visual con `fen`. Necesario cuando el user "canceló" una jugada
+  // (chessground ya movió la pieza visualmente pero el FEN sigue siendo
+  // el de antes) y queremos snap-back sin re-montar el componente.
+  resetSignal?: number
 }
 
 export function ChessBoard({
   fen, orientation = 'white', turn = 'white', onMove, feedback,
   dests, showDests = false, wrongRevertDelay = 0, hintLevel = 0, hintMove,
+  extraShapes, inputLocked = false, resetSignal = 0,
 }: ChessBoardProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cgRef        = useRef<Api | null>(null)
@@ -29,13 +41,17 @@ export function ChessBoard({
   onMoveRef.current  = onMove
 
   // Construir las shapes de hint (círculo en origen y/o flecha origen→destino)
-  const hintShapes: DrawShape[] = (() => {
-    if (!hintMove || hintLevel === 0) return []
-    const orig = hintMove.slice(0, 2) as Key
-    const dest = hintMove.slice(2, 4) as Key
-    if (hintLevel === 1) return [{ orig, brush: 'green' }]
-    if (hintLevel >= 2) return [{ orig, dest, brush: 'green' }]
-    return []
+  // combinadas con las extraShapes que venga desde afuera (motor, etc.).
+  const autoShapes: DrawShape[] = (() => {
+    const shapes: DrawShape[] = []
+    if (hintMove && hintLevel > 0) {
+      const orig = hintMove.slice(0, 2) as Key
+      const dest = hintMove.slice(2, 4) as Key
+      if (hintLevel === 1)      shapes.push({ orig, brush: 'green' })
+      else if (hintLevel >= 2)  shapes.push({ orig, dest, brush: 'green' })
+    }
+    if (extraShapes && extraShapes.length > 0) shapes.push(...extraShapes)
+    return shapes
   })()
 
   // Create Chessground ONCE on mount, destroy on unmount
@@ -58,7 +74,7 @@ export function ChessBoard({
       premovable: { enabled: false },
       draggable:  { enabled: true, distance: 3, showGhost: true },
       selectable: { enabled: true },
-      drawable:   { enabled: true, autoShapes: hintShapes },
+      drawable:   { enabled: true, autoShapes },
     })
     return () => { cgRef.current?.destroy(); cgRef.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -74,11 +90,11 @@ export function ChessBoard({
         orientation,
         turnColor: turn,
         movable: {
-          color: feedback === 'idle' ? turn : undefined,
+          color: (feedback === 'idle' && !inputLocked) ? turn : undefined,
           dests: dests ?? new Map(),
           showDests,
         },
-        drawable: { autoShapes: hintShapes },
+        drawable: { autoShapes },
       })
     }
 
@@ -86,12 +102,16 @@ export function ChessBoard({
     // por wrongRevertDelay ms antes de revertir, para que el usuario vea su error.
     // Mientras tanto, bloqueamos input vía movable.color = undefined (sin tocar fen).
     if (feedback === 'wrong' && wrongRevertDelay > 0) {
-      cgRef.current.set({ movable: { color: undefined }, drawable: { autoShapes: hintShapes } })
+      cgRef.current.set({ movable: { color: undefined }, drawable: { autoShapes } })
       const t = setTimeout(applyAll, wrongRevertDelay)
       return () => clearTimeout(t)
     }
     applyAll()
-  }, [fen, orientation, turn, feedback, dests, showDests, wrongRevertDelay, hintLevel, hintMove])
+    // resetSignal es una dep intencional aunque no la usemos en el body: cambiarla
+    // fuerza al effect a re-correr y re-aplicar el fen (snap-back tras cancelar
+    // una promoción, por ejemplo).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fen, orientation, turn, feedback, dests, showDests, wrongRevertDelay, hintLevel, hintMove, extraShapes, inputLocked, resetSignal])
 
   const ring =
     feedback === 'correct' ? 'ring-2 ring-[#6dbf6d] ring-offset-2 ring-offset-[#0e0d0b]' :

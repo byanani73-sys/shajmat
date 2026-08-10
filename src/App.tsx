@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Chess } from 'chess.js'
 import type { Key } from 'chessground/types'
 import { ChessBoard } from './ChessBoard'
@@ -23,6 +23,9 @@ import { flushPendingSessions, installOnlineOutboxListener } from './offlineOutb
 import { queuePendingSession } from './offlineDb'
 import { PuzzleQueue, NoPuzzlesFoundError, type Puzzle, type PuzzleFilters } from './lichess'
 import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, translateTheme, type ThemeOption } from './themes'
+import { PromotionSelector, type PromoPiece } from './PromotionSelector'
+import { StockfishEngine, formatEval, evalToBarFraction, type EvalInfo } from './stockfish'
+import type { DrawShape } from 'chessground/draw'
 
 function useIsDesktop() {
   const [desktop, setDesktop] = useState(() => window.innerWidth >= 768)
@@ -36,7 +39,11 @@ function useIsDesktop() {
 
 type AppState = 'init' | 'login' | 'config' | 'preparing' | 'storm' | 'results' | 'review' | 'dashboard'
 type Feedback = 'idle' | 'thinking' | 'correct' | 'wrong'
-interface HistoryEntry extends Puzzle { result: 'ok' | 'err' }
+// 'skipped' cubre puzzles saltados con el botón "Saltar" y el que estaba
+// activo cuando se cortó la sesión por timeout. No afecta scoreErr (el
+// contador de errores mira sólo movidas efectivamente falladas), pero sí
+// aparece en la revisión como "no resuelto" para poder repasarlo.
+interface HistoryEntry extends Puzzle { result: 'ok' | 'err' | 'skipped' }
 
 function computeDests(chess: Chess): Map<Key, Key[]> {
   const dests = new Map<Key, Key[]>()
@@ -52,8 +59,17 @@ function computeDests(chess: Chess): Map<Key, Key[]> {
 // Validates a user move against a puzzle's expected move, applying Lichess's rule:
 // exact match is always correct; any move that delivers mate is also correct when
 // the expected move also delivers mate (mate-in-1 positions have multiple valid mates).
+//
+// Ambos UCIs pueden traer letra de promoción como quinto char (ej: 'e7e8n' para
+// coronar caballo). La comparación exacta las considera — así, si la solución
+// exige subpromoción a caballo, coronar dama NO cuenta como correcto (salvo que
+// ambas jugadas den mate, en cuyo caso vale por la regla de Lichess).
 function validateMove(currentFen: string, userMoveUci: string, expectedUci: string): boolean {
-  if (userMoveUci.slice(0, 4) === expectedUci.slice(0, 4)) return true
+  // Match exacto incluyendo promoción
+  if (userMoveUci === expectedUci) return true
+  // Si ninguna tiene promoción y los primeros 4 chars coinciden → mismo movimiento
+  if (userMoveUci.length === 4 && expectedUci.length === 4
+      && userMoveUci === expectedUci) return true
 
   try {
     const expectedProbe = new Chess(currentFen)
@@ -1299,6 +1315,85 @@ function RangeSlider({ min, max, minValue, maxValue, step = 100, onChange }: {
   )
 }
 
+// ── Créditos modal ─────────────────────────────────────────────────────────
+// Reconocimientos a los proyectos open-source que hacen posible Shajmat.
+// Importante para cumplir con GPL-3 de Stockfish y chessground: mostramos
+// atribución + link al repo público y a la licencia.
+function CreditsModal({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  const link = { color: C.amber, textDecoration: 'none' }
+  return (
+    <div onClick={onClose} style={{
+      position:'fixed', inset:0, zIndex:100, background:'rgba(0,0,0,0.6)',
+      display:'flex', alignItems:'center', justifyContent:'center', padding:16,
+    }}>
+      <div onClick={(e)=>e.stopPropagation()} style={{
+        background:C.surface, border:`1px solid ${C.border}`, borderRadius:14,
+        padding:'24px 24px 20px', maxWidth:420, width:'100%', color:C.text,
+        fontFamily:"'DM Sans',system-ui,sans-serif",
+      }}>
+        <div style={{ ...cinzel, fontSize:16, fontWeight:700, letterSpacing:2, marginBottom:14 }}>CRÉDITOS</div>
+        <div style={{ fontSize:13, color:C.muted, lineHeight:1.6, marginBottom:16 }}>
+          Shajmat es posible gracias al trabajo de muchos proyectos open-source.
+        </div>
+        <ul style={{ listStyle:'none', padding:0, margin:0, display:'flex', flexDirection:'column', gap:12 }}>
+          <li>
+            <div style={{ fontSize:13, fontWeight:600, color:C.text }}>
+              <a href="https://github.com/official-stockfish/Stockfish" target="_blank" rel="noopener noreferrer" style={link}>Stockfish</a>
+              <span style={{ ...mono, fontSize:10, color:C.faint, marginLeft:8 }}>GPL-3</span>
+            </div>
+            <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+              Motor de análisis usado en la pantalla de revisión.
+              El código fuente y su licencia están disponibles públicamente.
+            </div>
+          </li>
+          <li>
+            <div style={{ fontSize:13, fontWeight:600, color:C.text }}>
+              <a href="https://database.lichess.org/#puzzles" target="_blank" rel="noopener noreferrer" style={link}>Lichess Puzzle Database</a>
+              <span style={{ ...mono, fontSize:10, color:C.faint, marginLeft:8 }}>CC0</span>
+            </div>
+            <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+              Base de puzzles con temas tácticos y aperturas etiquetadas.
+            </div>
+          </li>
+          <li>
+            <div style={{ fontSize:13, fontWeight:600, color:C.text }}>
+              <a href="https://github.com/lichess-org/chessground" target="_blank" rel="noopener noreferrer" style={link}>chessground</a>
+              <span style={{ ...mono, fontSize:10, color:C.faint, marginLeft:8 }}>GPL-3</span>
+            </div>
+            <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+              Componente de tablero de Lichess.
+            </div>
+          </li>
+          <li>
+            <div style={{ fontSize:13, fontWeight:600, color:C.text }}>
+              <a href="https://github.com/jhlywa/chess.js" target="_blank" rel="noopener noreferrer" style={link}>chess.js</a>
+              <span style={{ ...mono, fontSize:10, color:C.faint, marginLeft:8 }}>BSD-2</span>
+            </div>
+            <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+              Validación de jugadas y generación de FEN.
+            </div>
+          </li>
+          <li>
+            <div style={{ fontSize:13, fontWeight:600, color:C.text }}>Sonidos</div>
+            <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+              Set de sonidos de Lichess (MIT).
+            </div>
+          </li>
+        </ul>
+        <button onClick={onClose}
+          style={{ marginTop:20, width:'100%', padding:'12px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:700, cursor:'pointer' }}>
+          Cerrar
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Feedback modal (bottom sheet) ───────────────────────────────────────────
 function FeedbackModal({ userId, onClose }: { userId?: string; onClose: () => void }) {
   const [message, setMessage] = useState('')
@@ -1411,6 +1506,7 @@ function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, 
 }) {
   const [showThemes,   setShowThemes]   = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showCredits,  setShowCredits]  = useState(false)
   const desktop = useIsDesktop()
   const userElo  = user?.lichessElo
   const username = user?.username ?? user?.email?.split('@')[0]
@@ -1596,26 +1692,35 @@ function ConfigScreen({ user, isGuest, isOnline, mode, setMode, selectedThemes, 
         {/* Footer */}
         <div style={{
           borderTop:`1px solid ${C.border}`, marginTop:32, paddingTop:18,
-          display:'flex', alignItems:'center', justifyContent:'space-between',
+          display:'flex', flexDirection:'column', gap:10,
         }}>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <span style={{ ...cinzel, fontSize:13, color:'rgba(193,127,42,0.18)' }}>ש</span>
-            <span style={{ ...mono, fontSize:10, color:C.faint, letterSpacing:1 }}>Shajmat · hecho con ♟</span>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span style={{ ...cinzel, fontSize:13, color:'rgba(193,127,42,0.18)' }}>ש</span>
+              <span style={{ ...mono, fontSize:10, color:C.faint, letterSpacing:1 }}>Shajmat · hecho con ♟</span>
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+              <button onClick={() => setShowCredits(true)}
+                style={{ ...mono, fontSize:11, color:C.muted, background:'none', border:'none', cursor:'pointer', letterSpacing:1, padding:0 }}>
+                Créditos
+              </button>
+              <button onClick={() => setShowFeedback(true)}
+                style={{ ...mono, fontSize:11, color:C.muted, background:'none', border:'none', cursor:'pointer', letterSpacing:1, padding:0 }}>
+                Feedback →
+              </button>
+            </div>
           </div>
-          <button onClick={() => setShowFeedback(true)}
-            style={{ ...mono, fontSize:11, color:C.muted, background:'none', border:'none', cursor:'pointer', letterSpacing:1, padding:0 }}>
-            Feedback →
-          </button>
         </div>
       </div>
 
       {showFeedback && <FeedbackModal userId={user?.id} onClose={() => setShowFeedback(false)} />}
+      {showCredits && <CreditsModal onClose={() => setShowCredits(false)} />}
     </div>
   )
 }
 
 // ══ Game (Storm / Streak / Práctica) ══════════════════════════════════════════
-function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, attempts, feedback, loading, error, hintLevel, hintMove, solving, onRetry, onMove, onEnd, onSkip, onHint, onSolution }: {
+function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, minutes, timeLeft, timerStarted, scoreOk, scoreErr, attempts, feedback, loading, error, hintLevel, hintMove, solving, promotionPending, onPromote, onCancelPromote, boardResetSignal, onRetry, onMove, onEnd, onSkip, onHint, onSolution }: {
   mode:Mode
   puzzle:Puzzle|null; currentFen:string; currentTurn:'white'|'black'; dests:Map<Key, Key[]>
   puzzleNum:number; minutes:number; timeLeft:number; timerStarted:boolean
@@ -1623,6 +1728,9 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
   feedback:Feedback; loading:boolean
   error:string|null
   hintLevel:0|1|2; hintMove?:string; solving:boolean
+  promotionPending: {orig:string,dest:string} | null
+  onPromote:(p:PromoPiece)=>void; onCancelPromote:()=>void
+  boardResetSignal: number
   onRetry:()=>void
   onMove:(o:string,d:string)=>void; onEnd:()=>void
   onSkip:()=>void
@@ -1676,9 +1784,21 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
               ? <ChessBoard key={puzzle.id} fen={currentFen} orientation={puzzle.turn} turn={currentTurn} dests={dests} onMove={onMove} feedback={feedback}
                   wrongRevertDelay={mode === 'practice' ? 1000 : 0}
                   hintLevel={hintLevel} hintMove={hintMove}
+                  inputLocked={!!promotionPending}
+                  resetSignal={boardResetSignal}
                 />
               : null
         }
+        {/* Selector de subpromoción — overlay sobre la casilla de destino */}
+        {promotionPending && puzzle && (
+          <PromotionSelector
+            square={promotionPending.dest}
+            color={currentTurn}
+            orientation={puzzle.turn}
+            onChoose={onPromote}
+            onCancel={onCancelPromote}
+          />
+        )}
       </div>
 
       {/* Feedback strip */}
@@ -1823,202 +1943,433 @@ function GameScreen({ mode, puzzle, currentFen, currentTurn, dests, puzzleNum, m
   )
 }
 
-// ══ Results ═══════════════════════════════════════════════════════════════════
-// ══ Review (practicar errores, sin timer) ═════════════════════════════════════
+// ══ Review (analysis board con motor Stockfish) ═════════════════════════════
 //
-// Mismo layout y proporciones que GameScreen — sidebar contraída a la izquierda
-// (gestionada por NavLayout en el componente padre), tablero grande a la
-// derecha en desktop, columna en mobile. El sidePanel reemplaza el timer/score
-// stack por un card de "Practicar errores · N/M", contador de intentos y
-// botones para reintentar / saltar / volver a resultados.
-function ReviewScreen({ puzzles, idx, onNext, onBack }: {
-  puzzles:HistoryEntry[]; idx:number; onNext:()=>void; onBack:()=>void
+// Pantalla de revisión post-sesión. NO reintenta el puzzle: es un tablero de
+// análisis donde el usuario puede mover libremente al bando que juega y ver
+// la evaluación del motor. Reemplaza al "practicar errores" viejo.
+//
+// Flujo:
+//   - Arranca en puzzle.fen (posición del enunciado — es lo que el usuario
+//     vio cuando jugó el puzzle).
+//   - El usuario puede jugar movidas al bando cuya turno es. Cada movida se
+//     agrega al historial de análisis. Si el usuario navega atrás y juega
+//     otra cosa, se trunca la rama futura y se ramifica desde ese punto.
+//   - Botones: Ver solución (anima la línea oficial), Reiniciar posición,
+//     Revisar siguiente, Volver a resultados.
+//   - Toggles: Evaluación (motor prendido con barra + texto) y Flecha mejor
+//     jugada (arrow overlay). Los dos son independientes y se persisten en
+//     localStorage.
+
+interface AnalysisNode {
+  fen: string        // FEN después de la movida
+  san: string | null // SAN de la movida que llevó acá (null en la posición inicial)
+  uci: string | null // UCI de la movida (para dibujar last-move highlight)
+}
+
+const REVIEW_EVAL_KEY  = 'shajmat_review_eval_on'
+const REVIEW_ARROW_KEY = 'shajmat_review_arrow_on'
+
+function ReviewScreen({ puzzles, idx, filter, onNext, onBack }: {
+  puzzles: HistoryEntry[]
+  idx:     number
+  filter:  'errors' | 'all'
+  onNext:  () => void
+  onBack:  () => void
 }) {
   const desktop = useIsDesktop()
-  const [soundOn,    setSoundOn]    = useState(() => isSoundEnabled())
-  const [currentFen, setCurrentFen] = useState('')
-  const [currentTurn, setCurrentTurn] = useState<'white'|'black'>('white')
-  const [dests,      setDests]      = useState<Map<Key, Key[]>>(new Map())
-  const [moveIdx,    setMoveIdx]    = useState(0)
-  const [feedback,   setFeedback]   = useState<Feedback>('idle')
-  const [wrongHint,  setWrongHint]  = useState<string|null>(null)
-  const [attempts,   setAttempts]   = useState(0)
-  const chessRef   = useRef<Chess|null>(null)
-  const advanceRef = useRef<ReturnType<typeof setTimeout>|null>(null)
-
   const puzzle = puzzles[idx]
 
-  // Setup de un puzzle: reusable para el inicial y para "Intentar de nuevo".
-  const setupPuzzle = useCallback((p: HistoryEntry) => {
-    const c = new Chess(p.fen)
-    chessRef.current = c
-    setCurrentFen(p.fen)
-    setCurrentTurn(p.turn)
-    setDests(computeDests(c))
-    setMoveIdx(0)
-    setFeedback('idle')
-    setWrongHint(null)
-  }, [])
+  // ── Historial de análisis (movidas jugadas libremente en este puzzle) ──
+  // Es una lista lineal: si el usuario navega atrás y juega otra cosa,
+  // truncamos las movidas posteriores y ramificamos desde ese punto.
+  const [nodes,      setNodes]      = useState<AnalysisNode[]>([])
+  const [nodeIdx,    setNodeIdx]    = useState(0)
+  const [playingSolution, setPlayingSolution] = useState(false)
+  const [promotionPending, setPromotionPending] = useState<{orig:string,dest:string} | null>(null)
+  const [boardResetSignal, setBoardResetSignal] = useState(0)
+
+  // Toggles — persistidos en localStorage. Default: prendidos.
+  const [evalOn,  setEvalOn]  = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem(REVIEW_EVAL_KEY) !== '0' : true
+  )
+  const [arrowOn, setArrowOn] = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem(REVIEW_ARROW_KEY) !== '0' : true
+  )
+  useEffect(() => { localStorage.setItem(REVIEW_EVAL_KEY,  evalOn  ? '1' : '0') }, [evalOn])
+  useEffect(() => { localStorage.setItem(REVIEW_ARROW_KEY, arrowOn ? '1' : '0') }, [arrowOn])
+
+  // Motor Stockfish — se crea una sola vez al montar. Vive por el ciclo
+  // completo de la pantalla de review (no se recrea al cambiar de puzzle
+  // dentro de la misma sesión de revisión).
+  const engineRef = useRef<StockfishEngine|null>(null)
+  const [evalInfo, setEvalInfo] = useState<EvalInfo|null>(null)
+  const [engineReady, setEngineReady] = useState(false)
+  const [engineError, setEngineError] = useState<string|null>(null)
 
   useEffect(() => {
-    if (!puzzle) return
-    setupPuzzle(puzzle)
-    setAttempts(0)
-    return () => { if (advanceRef.current) clearTimeout(advanceRef.current) }
-  }, [puzzle?.id, setupPuzzle])
-
-  const handleRetry = useCallback(() => {
-    if (!puzzle) return
-    if (advanceRef.current) clearTimeout(advanceRef.current)
-    setupPuzzle(puzzle)
-    // Mantenemos `attempts` — el contador acumula intentos de la sesión
-    // de review, no se reinicia por reset manual.
-  }, [puzzle, setupPuzzle])
-
-  const handleMove = useCallback((orig: string, dest: string) => {
-    if (feedback !== 'idle' || !puzzle || !chessRef.current) return
-
-    const expected  = puzzle.solution[moveIdx]
-    const userMove  = orig + dest
-    const isCorrect = validateMove(currentFen, userMove, expected)
-
-    if (!isCorrect) {
-      try {
-        const probe = new Chess(currentFen)
-        const m = probe.move({
-          from: expected.slice(0, 2), to: expected.slice(2, 4),
-          promotion: expected.length > 4 ? (expected[4] as 'q'|'r'|'b'|'n') : undefined,
-        })
-        setWrongHint(m?.san ?? expected)
-      } catch { setWrongHint(expected) }
-
-      setFeedback('wrong')
-      setAttempts(a => a + 1)
-      playWrong()
-      // In review: bounce back, let user keep trying
-      advanceRef.current = setTimeout(() => {
-        setFeedback('idle')
-      }, 1800)
-      return
+    // Lazy: sólo iniciamos el motor si el user tiene evaluación o flecha
+    // encendidas. Si las dos están apagadas al montar, dejamos el motor
+    // dormido — se levantará cuando se prendan (ver siguiente effect).
+    if (!evalOn && !arrowOn) return
+    if (engineRef.current) return
+    const eng = new StockfishEngine()
+    engineRef.current = eng
+    eng.onEval(info => setEvalInfo(info))
+    eng.ready$()
+      .then(() => setEngineReady(true))
+      .catch(err => setEngineError(String(err?.message ?? err)))
+    return () => {
+      eng.destroy()
+      engineRef.current = null
+      setEngineReady(false)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evalOn || arrowOn])
 
+  // ── Setup puzzle nuevo (o al cambiar idx) ──
+  useEffect(() => {
+    if (!puzzle) return
+    setNodes([{ fen: puzzle.fen, san: null, uci: null }])
+    setNodeIdx(0)
+    setPlayingSolution(false)
+    setPromotionPending(null)
+    setEvalInfo(null)
+  }, [puzzle?.id])
+
+  const currentNode = nodes[nodeIdx]
+  const currentFen  = currentNode?.fen ?? ''
+  const currentTurn: 'white'|'black' = currentFen
+    ? (currentFen.split(' ')[1] === 'w' ? 'white' : 'black')
+    : 'white'
+
+  // Movidas legales derivadas del FEN visible (useMemo → sin state extra)
+  const dests = useMemo<Map<Key, Key[]>>(() => {
+    if (!currentFen) return new Map()
+    try { return computeDests(new Chess(currentFen)) }
+    catch { return new Map() }
+  }, [currentFen])
+
+  // Disparar análisis al motor cuando cambia la posición y hay motor prendido
+  useEffect(() => {
+    if (!currentFen) return
+    if (!engineReady || !engineRef.current) return
+    if (!evalOn && !arrowOn) return
+    engineRef.current.analyze(currentFen, { depth: 18 })
+  }, [currentFen, engineReady, evalOn, arrowOn])
+
+  // ── handleMove: jugar libre (side-to-move) ──
+  const handleMove = useCallback((orig: string, dest: string, promotion?: PromoPiece) => {
+    if (playingSolution) return
+    if (!currentFen) return
+    const chess = new Chess(currentFen)
+    // Detección de promoción — igual que en GameScreen
+    if (!promotion) {
+      const piece = chess.get(orig as never)
+      const destRank = dest[1]
+      const isPromo = piece?.type === 'p' && (
+        (piece.color === 'w' && destRank === '8') ||
+        (piece.color === 'b' && destRank === '1')
+      )
+      if (isPromo) {
+        setPromotionPending({ orig, dest })
+        return
+      }
+    }
+    let m
     try {
-      chessRef.current.move({
-        from: orig, to: dest,
-        promotion: 'q', // default; chess.js ignores for non-promotion moves
-      })
+      m = chess.move({ from: orig, to: dest, promotion: promotion ?? 'q' })
     } catch { return }
+    if (!m) return
+    const uci = orig + dest + (promotion ?? '')
+    // Ramificar: si estábamos navegados atrás, truncar las movidas futuras
+    // y agregar la nueva a partir de acá.
+    setNodes(prev => {
+      const trimmed = prev.slice(0, nodeIdx + 1)
+      return [...trimmed, { fen: chess.fen(), san: m.san, uci }]
+    })
+    setNodeIdx(i => i + 1)
+    playMove()
+  }, [currentFen, nodeIdx, playingSolution])
 
-    const nextMoveIdx = moveIdx + 1
-    setCurrentFen(chessRef.current.fen())
-    setDests(new Map())
+  const resolvePromotion = useCallback((piece: PromoPiece) => {
+    if (!promotionPending) return
+    const { orig, dest } = promotionPending
+    setPromotionPending(null)
+    handleMove(orig, dest, piece)
+  }, [promotionPending, handleMove])
 
-    if (nextMoveIdx >= puzzle.solution.length) {
-      setFeedback('correct')
-      setWrongHint(null)
-      playCorrect()
-      advanceRef.current = setTimeout(onNext, 1200)
-      return
+  const cancelPromotion = useCallback(() => {
+    setPromotionPending(null)
+    setBoardResetSignal(s => s + 1)
+  }, [])
+
+  // ── Navegación de historial ──
+  const canPrev = nodeIdx > 0
+  const canNext = nodeIdx < nodes.length - 1
+  const goPrev  = useCallback(() => setNodeIdx(i => Math.max(0, i - 1)), [])
+  const goNext  = useCallback(() => setNodeIdx(i => Math.min(nodes.length - 1, i + 1)), [nodes.length])
+  const goFirst = useCallback(() => setNodeIdx(0), [])
+  const goLast  = useCallback(() => setNodeIdx(nodes.length - 1), [nodes.length])
+
+  // Keyboard shortcuts para navegar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (promotionPending) return  // el selector maneja su propio Escape
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); goPrev() }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goNext() }
+      if (e.key === 'Home')       { e.preventDefault(); goFirst() }
+      if (e.key === 'End')        { e.preventDefault(); goLast() }
     }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [goPrev, goNext, goFirst, goLast, promotionPending])
 
-    setFeedback('thinking')
-    setMoveIdx(nextMoveIdx)
-    advanceRef.current = setTimeout(() => {
-      if (!chessRef.current || !puzzle) return
-      const opp = puzzle.solution[nextMoveIdx]
+  // ── Reiniciar posición: descartar todas las movidas del análisis ──
+  const resetPosition = useCallback(() => {
+    if (!puzzle) return
+    setNodes([{ fen: puzzle.fen, san: null, uci: null }])
+    setNodeIdx(0)
+    setPromotionPending(null)
+  }, [puzzle])
+
+  // ── Ver solución: animar la línea oficial desde la posición inicial ──
+  const solutionTimerRef = useRef<ReturnType<typeof setTimeout>|null>(null)
+  useEffect(() => () => {
+    if (solutionTimerRef.current) clearTimeout(solutionTimerRef.current)
+  }, [])
+
+  const playSolution = useCallback(() => {
+    if (!puzzle || playingSolution) return
+    setPlayingSolution(true)
+    setPromotionPending(null)
+    // Empezamos desde el nodo inicial (fen del puzzle) y vamos empujando
+    // cada movida de la solución como un nuevo nodo animado.
+    const startNodes: AnalysisNode[] = [{ fen: puzzle.fen, san: null, uci: null }]
+    setNodes(startNodes)
+    setNodeIdx(0)
+    const chess = new Chess(puzzle.fen)
+
+    let step = 0
+    const playStep = () => {
+      if (step >= puzzle.solution.length) {
+        setPlayingSolution(false)
+        return
+      }
+      const uci = puzzle.solution[step]
+      let m
       try {
-        chessRef.current.move({
-          from: opp.slice(0, 2), to: opp.slice(2, 4),
-          promotion: opp.length > 4 ? (opp[4] as 'q'|'r'|'b'|'n') : undefined,
+        m = chess.move({
+          from: uci.slice(0, 2), to: uci.slice(2, 4),
+          promotion: uci.length > 4 ? (uci[4] as 'q'|'r'|'b'|'n') : undefined,
         })
-      } catch { return }
-      setCurrentFen(chessRef.current.fen())
-      setCurrentTurn(chessRef.current.turn() === 'w' ? 'white' : 'black')
-      setDests(computeDests(chessRef.current))
-      setMoveIdx(nextMoveIdx + 1)
-      setFeedback('idle')
+      } catch { setPlayingSolution(false); return }
+      if (!m) { setPlayingSolution(false); return }
+      const newNode: AnalysisNode = { fen: chess.fen(), san: m.san, uci }
+      setNodes(ns => [...ns, newNode])
+      setNodeIdx(i => i + 1)
       playMove()
-    }, 550)
-  }, [feedback, puzzle, moveIdx, currentFen, onNext])
+      step += 1
+      solutionTimerRef.current = setTimeout(playStep, 700)
+    }
+    solutionTimerRef.current = setTimeout(playStep, 350)
+  }, [puzzle, playingSolution])
 
-  if (!puzzle) return null
+  // ── UI helpers ──
+  // Etiquetas de estado del bando/turno
+  const turnLabel = currentTurn === 'white' ? 'Blancas juegan' : 'Negras juegan'
 
-  const fbBg    = feedback==='correct' ? C.correctBg : feedback==='wrong' ? C.redBg : 'transparent'
-  const fbColor = feedback==='correct' ? C.correct   : feedback==='wrong' ? C.red   : C.muted
-  const fbText  = feedback==='correct' ? '¡Resuelto!'
-                : feedback==='wrong'   ? (wrongHint ? `Era ${wrongHint} · probá de nuevo` : 'Intentá de nuevo')
-                : feedback==='thinking'? 'El rival responde...'
-                : `${currentTurn==='white'?'Blancas':'Negras'} juegan`
+  // Flecha de mejor jugada (si arrowOn y hay eval y la eval corresponde al FEN visible)
+  const bestMoveArrow: DrawShape[] = (() => {
+    if (!arrowOn || !evalInfo || evalInfo.fen !== currentFen) return []
+    const pv = evalInfo.pv?.[0]
+    if (!pv || pv.length < 4) return []
+    return [{ orig: pv.slice(0, 2) as Key, dest: pv.slice(2, 4) as Key, brush: 'blue' }]
+  })()
 
-  // ── Board area: tags + tablero + feedback strip (mismo shape que GameScreen)
+  // Last-move highlight (rectángulos verdes) para el movimiento visible actual
+  const lastMoveShapes: DrawShape[] = (() => {
+    const uci = currentNode?.uci
+    if (!uci || uci.length < 4) return []
+    return [
+      { orig: uci.slice(0, 2) as Key, brush: 'yellow' },
+      { orig: uci.slice(2, 4) as Key, brush: 'yellow' },
+    ]
+  })()
+
+  // Feedback strip
+  const evalText = engineError
+    ? 'Motor no disponible'
+    : (evalOn && evalInfo && evalInfo.fen === currentFen)
+      ? `${formatEval(evalInfo)} · d${evalInfo.depth}`
+      : (evalOn && engineReady)
+        ? 'Analizando...'
+        : ''
+
+  const barFraction = (evalOn && evalInfo && evalInfo.fen === currentFen)
+    ? evalToBarFraction(evalInfo)
+    : 0.5
+
+  // ── Board area ──
   const boardWidth = desktop ? '580px' : undefined
-  const boardArea = (
+
+  const boardArea = puzzle && (
     <div style={{ flex: desktop ? '0 0 auto' : undefined, width: boardWidth ?? '100%' }}>
-      {/* Tags — mismo orden y estilo que GameScreen */}
+      {/* Tags */}
       <div style={{
         display:'flex', flexWrap:'wrap', gap:6, marginBottom:10,
         width:'100%', justifyContent: desktop ? 'flex-start' : 'center',
       }}>
         <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>{puzzle.theme}</span>
         <span style={{ ...mono, fontSize:11, background:C.amberBg, color:C.amber, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.borderAm}`, whiteSpace:'nowrap' }}>ELO {puzzle.rating}</span>
-        <span style={{ fontSize:11, background:C.surface, color:C.muted, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>{currentTurn==='white'?'Blancas':'Negras'} juegan</span>
+        <span style={{ fontSize:11, background:C.surface, color: puzzle.result === 'err' ? C.red : puzzle.result === 'skipped' ? C.muted : C.correct, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>
+          {puzzle.result === 'err' ? 'Falló' : puzzle.result === 'skipped' ? 'Sin resolver' : 'Resuelto'}
+        </span>
         <span style={{ ...mono, fontSize:10, background:C.surface, color:C.faint, padding:'3px 10px', borderRadius:20, border:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>#{puzzle.id}</span>
       </div>
 
-      {/* Board */}
-      <div style={{ position:'relative', borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
-        {currentFen && (
-          <ChessBoard key={puzzle.id} fen={currentFen} orientation={puzzle.turn} turn={currentTurn}
-            dests={dests} onMove={handleMove} feedback={feedback} showDests />
+      {/* Eval bar + Board */}
+      <div style={{ display:'flex', gap:8 }}>
+        {evalOn && (
+          <div style={{ width:14, borderRadius:4, background:'#1a1a1a', overflow:'hidden', display:'flex', flexDirection:'column' }}>
+            <div style={{ height: `${(1 - barFraction) * 100}%`, background:'#1a1a1a', transition:'height .3s' }} />
+            <div style={{ height: `${barFraction * 100}%`, background:'#f3ead6', transition:'height .3s' }} />
+          </div>
         )}
+        <div style={{ flex:1, position:'relative', borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)' }}>
+          {currentFen && (
+            <ChessBoard
+              key={puzzle.id}
+              fen={currentFen}
+              orientation={puzzle.turn}
+              turn={currentTurn}
+              dests={playingSolution ? new Map() : dests}
+              onMove={handleMove}
+              feedback="idle"
+              showDests
+              extraShapes={[...bestMoveArrow, ...lastMoveShapes]}
+              inputLocked={!!promotionPending || playingSolution}
+              resetSignal={boardResetSignal}
+            />
+          )}
+          {promotionPending && (
+            <PromotionSelector
+              square={promotionPending.dest}
+              color={currentTurn}
+              orientation={puzzle.turn}
+              onChoose={resolvePromotion}
+              onCancel={cancelPromotion}
+            />
+          )}
+        </div>
       </div>
 
-      {/* Feedback strip */}
-      <div style={{ marginTop:10, padding:fbBg!=='transparent'?'8px 16px':'4px 0', borderRadius:10, background:fbBg, fontSize:13, fontWeight:fbBg!=='transparent'?500:400, color:fbColor, transition:'all .2s', minHeight:36, display:'flex', alignItems:'center', gap:8, justifyContent:'center' }}>
-        {fbText}
+      {/* Feedback strip: turno + eval */}
+      <div style={{ marginTop:10, padding:'4px 0', borderRadius:10, fontSize:13, color:C.muted, minHeight:36, display:'flex', alignItems:'center', gap:12, justifyContent:'space-between' }}>
+        <span>{turnLabel}</span>
+        {evalText && <span style={{ ...mono, fontSize:12, color: engineError ? C.red : C.text }}>{evalText}</span>}
+      </div>
+
+      {/* Move navigation strip */}
+      <div style={{ display:'flex', alignItems:'center', gap:4, marginTop:6, background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, padding:'4px 6px' }}>
+        <button onClick={goFirst} disabled={!canPrev}
+          style={{ padding:'6px 10px', borderRadius:6, background:'transparent', border:'none', color: canPrev ? C.text : C.faint, cursor: canPrev ? 'pointer' : 'default', fontSize:14 }}>⏮</button>
+        <button onClick={goPrev} disabled={!canPrev}
+          style={{ padding:'6px 10px', borderRadius:6, background:'transparent', border:'none', color: canPrev ? C.text : C.faint, cursor: canPrev ? 'pointer' : 'default', fontSize:14 }}>◀</button>
+        <div style={{ flex:1, display:'flex', flexWrap:'wrap', gap:4, minHeight:24, alignItems:'center', overflowX:'auto', padding:'2px 4px' }}>
+          {nodes.slice(1).map((n, i) => {
+            const isCurrent = i + 1 === nodeIdx
+            const moveNumber = Math.floor(i / 2) + 1
+            const isWhite = i % 2 === 0
+            return (
+              <button key={i} onClick={() => setNodeIdx(i + 1)}
+                style={{
+                  ...mono, fontSize:11, padding:'2px 6px', borderRadius:4,
+                  background: isCurrent ? C.amberBg : 'transparent',
+                  border: isCurrent ? `1px solid ${C.borderAm}` : '1px solid transparent',
+                  color: isCurrent ? C.amber : C.muted, cursor:'pointer', whiteSpace:'nowrap',
+                }}>
+                {isWhite && `${moveNumber}.`}{!isWhite && ' '}{n.san}
+              </button>
+            )
+          })}
+          {nodes.length === 1 && (
+            <span style={{ ...mono, fontSize:10, color:C.faint, padding:'2px 4px' }}>Sin movidas · jugá para explorar</span>
+          )}
+        </div>
+        <button onClick={goNext} disabled={!canNext}
+          style={{ padding:'6px 10px', borderRadius:6, background:'transparent', border:'none', color: canNext ? C.text : C.faint, cursor: canNext ? 'pointer' : 'default', fontSize:14 }}>▶</button>
+        <button onClick={goLast} disabled={!canNext}
+          style={{ padding:'6px 10px', borderRadius:6, background:'transparent', border:'none', color: canNext ? C.text : C.faint, cursor: canNext ? 'pointer' : 'default', fontSize:14 }}>⏭</button>
       </div>
     </div>
   )
 
-  // ── Side panel: card de modo + intentos + botones + back ────────────────
+  // ── Side panel ──
   const reviewCard = (
-    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '24px 28px' : '14px 20px', textAlign:'center' }}>
-      <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.muted, marginBottom: desktop ? 8 : 4 }}>Practicar errores</div>
-      <div style={{ ...mono, fontSize: desktop ? 56 : 36, fontWeight:700, color:C.amber, lineHeight:1, letterSpacing:-2 }}>
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding: desktop ? '20px 24px' : '12px 18px', textAlign:'center' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:4, textTransform:'uppercase', color:C.muted, marginBottom: desktop ? 8 : 4 }}>
+        {filter === 'errors' ? 'Revisar errores' : 'Revisar todos'}
+      </div>
+      <div style={{ ...mono, fontSize: desktop ? 48 : 32, fontWeight:700, color:C.amber, lineHeight:1, letterSpacing:-2 }}>
         {idx+1} <span style={{ color:C.muted }}>/</span> {puzzles.length}
       </div>
     </div>
   )
 
-  const attemptsCard = attempts > 0 && (
-    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-      <span style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted }}>Intentos</span>
-      <span style={{ ...mono, fontSize: desktop ? 24 : 18, fontWeight:700, color: C.red }}>
-        {attempts}
-      </span>
+  const togglesCard = (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'12px 16px', display:'flex', flexDirection:'column', gap:10 }}>
+      <label style={{ display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer', gap:12 }}>
+        <span style={{ fontSize:13, color:C.text }}>Evaluación</span>
+        <button onClick={() => setEvalOn(v => !v)}
+          style={{ width:36, height:20, borderRadius:10, background: evalOn ? C.amber : C.border, border:'none', position:'relative', cursor:'pointer', padding:0, transition:'background .15s' }}>
+          <div style={{ position:'absolute', top:2, left: evalOn ? 18 : 2, width:16, height:16, borderRadius:'50%', background:'#fff', transition:'left .15s' }} />
+        </button>
+      </label>
+      <label style={{ display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer', gap:12 }}>
+        <span style={{ fontSize:13, color:C.text }}>Flecha mejor jugada</span>
+        <button onClick={() => setArrowOn(v => !v)}
+          style={{ width:36, height:20, borderRadius:10, background: arrowOn ? C.amber : C.border, border:'none', position:'relative', cursor:'pointer', padding:0, transition:'background .15s' }}>
+          <div style={{ position:'absolute', top:2, left: arrowOn ? 18 : 2, width:16, height:16, borderRadius:'50%', background:'#fff', transition:'left .15s' }} />
+        </button>
+      </label>
     </div>
   )
 
-  // Botones primarios — mismo estilo que los de Práctica en GameScreen
+  // Card con la línea principal del motor (PV en SAN) cuando la evaluación
+  // está prendida. Convertimos las UCI del engine a SAN caminando el chess.js.
+  const pvCard = evalOn && evalInfo && evalInfo.fen === currentFen && evalInfo.pv.length > 0 && (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'12px 16px' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:6 }}>Línea principal</div>
+      <div style={{ ...mono, fontSize:12, color:C.text, lineHeight:1.5, wordBreak:'break-word' }}>
+        {pvToSan(currentFen, evalInfo.pv).join(' ')}
+      </div>
+    </div>
+  )
+
   const actionButtons = (
     <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-      <button onClick={handleRetry}
-        style={{ width:'100%', padding:'12px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:500, cursor:'pointer' }}>
-        Intentar de nuevo
+      <button onClick={playSolution} disabled={playingSolution}
+        style={{ width:'100%', padding:'12px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:700, cursor: playingSolution ? 'not-allowed' : 'pointer', opacity: playingSolution ? 0.6 : 1 }}>
+        {playingSolution ? 'Mostrando solución...' : 'Ver solución'}
+      </button>
+      <button onClick={resetPosition} disabled={playingSolution}
+        style={{ width:'100%', padding:'12px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.muted, fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:500, cursor: playingSolution ? 'not-allowed' : 'pointer', opacity: playingSolution ? 0.5 : 1 }}>
+        Reiniciar posición
       </button>
       <button onClick={onNext}
         style={{ width:'100%', padding:'14px', borderRadius:10, background:C.surface, border:`1px solid ${C.border}`, color:C.text, fontFamily:"'DM Sans',sans-serif", fontSize:14, fontWeight:500, cursor:'pointer' }}>
-        Saltar →
+        Revisar siguiente →
       </button>
     </div>
   )
 
   const sidePanel = (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', gap: desktop ? 20 : 12, minWidth:0 }}>
+    <div style={{ flex:1, display:'flex', flexDirection:'column', gap: desktop ? 14 : 10, minWidth:0 }}>
       {reviewCard}
-      {attemptsCard}
+      {togglesCard}
+      {pvCard}
       {actionButtons}
-      {/* Back to results — empujado al fondo en desktop, mismo lugar que "Terminar sesión" */}
       {desktop && <div style={{ flex:1 }} />}
       <button onClick={onBack}
         style={{ ...mono, fontSize:10, letterSpacing:2, textTransform:'uppercase', color:C.muted, cursor:'pointer', background:'none', border:'none', paddingTop:4, textAlign:'center' }}>
@@ -2027,36 +2378,10 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
     </div>
   )
 
-  // Toggle de sonido — esquina superior derecha, igual que GameScreen
-  const soundToggle = (
-    <button
-      onClick={() => setSoundOn(toggleSound())}
-      title={soundOn ? 'Sonido activado' : 'Sonido desactivado'}
-      style={{
-        position:'absolute', top: desktop ? 16 : 12, right: desktop ? 16 : 12, zIndex: 5,
-        width:32, height:32, borderRadius:8, padding:0, cursor:'pointer',
-        background:'transparent', border:`1px solid ${C.border}`,
-        color: soundOn ? C.amber : C.muted,
-        display:'flex', alignItems:'center', justifyContent:'center',
-      }}>
-      {soundOn ? (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M3 6V10H5L8 12.5V3.5L5 6H3Z" fill="currentColor"/>
-          <path d="M10.5 5C11.5 5.8 11.5 10.2 10.5 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-        </svg>
-      ) : (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M3 6V10H5L8 12.5V3.5L5 6H3Z" fill="currentColor"/>
-          <line x1="11" y1="5" x2="14" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-          <line x1="14" y1="5" x2="11" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-        </svg>
-      )}
-    </button>
-  )
+  if (!puzzle) return null
 
   return (
     <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent: desktop ? 'center' : 'flex-start', padding: desktop ? '40px 48px' : '16px 16px 24px', fontFamily:"'DM Sans',system-ui,sans-serif", position:'relative' }}>
-      {soundToggle}
       <div style={{
         width:'100%',
         maxWidth: desktop ? 940 : 460,
@@ -2069,6 +2394,31 @@ function ReviewScreen({ puzzles, idx, onNext, onBack }: {
       </div>
     </div>
   )
+}
+
+// Convierte una PV en UCI a un array de SAN (con numeración: "1.e4", "1...e5")
+// desde el `fen` dado. Se usa para mostrar la línea principal del motor.
+function pvToSan(fen: string, pv: string[]): string[] {
+  const out: string[] = []
+  try {
+    const c = new Chess(fen)
+    const startFullMove = parseInt(fen.split(' ')[5] || '1', 10)
+    const startIsWhite  = fen.split(' ')[1] === 'w'
+    for (let i = 0; i < pv.length && i < 12; i++) {
+      const uci = pv[i]
+      const m = c.move({
+        from: uci.slice(0, 2), to: uci.slice(2, 4),
+        promotion: uci.length > 4 ? (uci[4] as 'q'|'r'|'b'|'n') : undefined,
+      })
+      if (!m) break
+      const moveNumber = startFullMove + Math.floor((i + (startIsWhite ? 0 : 1)) / 2)
+      const isWhiteMove = startIsWhite ? (i % 2 === 0) : (i % 2 === 1)
+      if (isWhiteMove) out.push(`${moveNumber}.${m.san}`)
+      else if (i === 0)      out.push(`${moveNumber}...${m.san}`)
+      else                    out.push(m.san)
+    }
+  } catch { /* ignore */ }
+  return out
 }
 
 
@@ -2135,14 +2485,19 @@ function PostSessionPrompt({ onDismiss }: { onDismiss: () => void }) {
 }
 
 function ResultsScreen({ mode, minutes, scoreOk, scoreErr, history, bestScores, streakBreaker, onRepeat, onReview, onConfig }: {
+  // onReview recibe qué subset de puzzles revisar: 'errors' incluye errores
+  // y saltados, 'all' incluye también correctos.
   mode:Mode
   minutes:number; scoreOk:number; scoreErr:number
   history:HistoryEntry[]; bestScores:BestScores|null
   streakBreaker:HistoryEntry|null
-  onRepeat:()=>void; onReview:()=>void; onConfig:()=>void
+  onRepeat:()=>void; onReview:(filter:'errors'|'all')=>void; onConfig:()=>void
 }) {
   const total = scoreOk + scoreErr, acc = total > 0 ? Math.round((scoreOk/total)*100) : 0
-  const wrong = history.filter(h => h.result === 'err')
+  // "Para revisar como error" = fallado o saltado/timeout sin resolver.
+  const wrong    = history.filter(h => h.result === 'err' || h.result === 'skipped')
+  const errCount = history.filter(h => h.result === 'err').length
+  const skipCount = history.filter(h => h.result === 'skipped').length
   const desktop = useIsDesktop()
 
   const headline = mode === 'storm'  ? `Storm · ${minutes} minuto${minutes>1?'s':''}`
@@ -2227,34 +2582,57 @@ function ResultsScreen({ mode, minutes, scoreOk, scoreErr, history, bestScores, 
           </div>
         )}
 
-        {/* Errors section — Storm muestra; Streak no (ya tiene streakBreaker box); Practice tampoco (no acumula history de errores) */}
-        {wrong.length > 0 && mode === 'storm' && (
-          <div style={{ display: desktop ? 'grid' : 'block', gridTemplateColumns: desktop ? '1fr 1fr' : undefined, gap: desktop ? 24 : 0, marginBottom:24 }}>
-            <div>
-              <button onClick={onReview} style={{ width:'100%', padding:'14px 16px', background:C.amberBg, border:`1px solid ${C.borderAm}`, borderRadius:12, marginBottom:16, cursor:'pointer', display:'flex', alignItems:'center', gap:12, textAlign:'left' }}>
-                <div style={{ width:36, height:36, borderRadius:'50%', background:C.surface2, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, color:C.amber, flexShrink:0 }}>↻</div>
+        {/* Review — dos botones: "Revisar errores" y "Revisar todos".
+            Se muestra en todos los modos si hay al menos un puzzle jugado.
+            En Storm además listamos los puzzles fallados/saltados a la derecha
+            en desktop (para dar contexto sin abrir el review). */}
+        {history.length > 0 && (
+          <div style={{ display: (desktop && mode === 'storm' && wrong.length > 0) ? 'grid' : 'block', gridTemplateColumns: (desktop && mode === 'storm' && wrong.length > 0) ? '1fr 1fr' : undefined, gap: desktop ? 24 : 0, marginBottom:24 }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {wrong.length > 0 && (
+                <button onClick={() => onReview('errors')} style={{ width:'100%', padding:'14px 16px', background:C.amberBg, border:`1px solid ${C.borderAm}`, borderRadius:12, cursor:'pointer', display:'flex', alignItems:'center', gap:12, textAlign:'left' }}>
+                  <div style={{ width:36, height:36, borderRadius:'50%', background:C.surface2, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, color:C.amber, flexShrink:0 }}>↻</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:14, fontWeight:600, color:C.text }}>Revisar errores</div>
+                    <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>
+                      {wrong.length} puzzle{wrong.length>1?'s':''}
+                      {errCount > 0 && skipCount > 0 && ` · ${errCount} fallado${errCount>1?'s':''} + ${skipCount} sin resolver`}
+                      {errCount > 0 && skipCount === 0 && ' · con motor de análisis'}
+                      {errCount === 0 && skipCount > 0 && ' · no llegaste a moverlos'}
+                    </div>
+                  </div>
+                  <span style={{ fontSize:18, color:C.amber }}>→</span>
+                </button>
+              )}
+              <button onClick={() => onReview('all')} style={{ width:'100%', padding:'14px 16px', background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, cursor:'pointer', display:'flex', alignItems:'center', gap:12, textAlign:'left' }}>
+                <div style={{ width:36, height:36, borderRadius:'50%', background:C.surface2, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, color:C.muted, flexShrink:0 }}>♟</div>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontSize:14, fontWeight:600, color:C.text }}>Practicar errores</div>
-                  <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{wrong.length} puzzle{wrong.length>1?'s':''} · sin apuro de tiempo</div>
+                  <div style={{ fontSize:14, fontWeight:600, color:C.text }}>Revisar todos los ejercicios</div>
+                  <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{history.length} puzzle{history.length>1?'s':''} · con motor de análisis</div>
                 </div>
-                <span style={{ fontSize:18, color:C.amber }}>→</span>
+                <span style={{ fontSize:18, color:C.muted }}>→</span>
               </button>
             </div>
-            <div>
-              <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:8 }}>Puzzles fallados</div>
-              {wrong.map((p,i)=>(
-                <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', background:C.surface, borderRadius:8, borderLeft:`2px solid ${C.red}`, marginBottom:5 }}>
-                  <div>
-                    <div style={{ fontSize:12, fontWeight:500, color:C.text }}>{p.theme}</div>
-                    <div style={{ ...mono, fontSize:10, color:C.faint, marginTop:2 }}>#{p.id}</div>
+            {desktop && mode === 'storm' && wrong.length > 0 && (
+              <div>
+                <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:8 }}>Puzzles a revisar</div>
+                {wrong.map((p,i)=>(
+                  <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', background:C.surface, borderRadius:8, borderLeft:`2px solid ${p.result==='err'?C.red:C.muted}`, marginBottom:5 }}>
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:500, color:C.text }}>
+                        {p.theme}
+                        {p.result === 'skipped' && <span style={{ ...mono, fontSize:9, color:C.faint, marginLeft:6, letterSpacing:1, textTransform:'uppercase' }}>· sin resolver</span>}
+                      </div>
+                      <div style={{ ...mono, fontSize:10, color:C.faint, marginTop:2 }}>#{p.id}</div>
+                    </div>
+                    <span style={{ ...mono, fontSize:10, background:C.surface2, color:C.muted, padding:'2px 8px', borderRadius:20 }}>{p.rating}</span>
                   </div>
-                  <span style={{ ...mono, fontSize:10, background:C.surface2, color:C.muted, padding:'2px 8px', borderRadius:20 }}>{p.rating}</span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
-        {wrong.length===0 && mode !== 'streak' && <div style={{ ...mono, fontSize:11, letterSpacing:2, textTransform:'uppercase', color:C.muted, textAlign:'center', marginBottom:24 }}>Sin errores · sesión perfecta</div>}
+        {wrong.length===0 && mode === 'storm' && history.length > 0 && <div style={{ ...mono, fontSize:11, letterSpacing:2, textTransform:'uppercase', color:C.muted, textAlign:'center', marginTop:8, marginBottom:24 }}>Sin errores · sesión perfecta</div>}
 
         <div style={{ display:'flex', gap:8 }}>
           <button onClick={onConfig} style={{ flex:1, padding:'13px 0', borderRadius:10, border:`1px solid ${C.border}`, background:C.surface, fontSize:13, fontWeight:500, color:C.muted, cursor:'pointer', fontFamily:"'DM Sans',sans-serif" }}>Configurar</button>
@@ -2353,6 +2731,13 @@ export default function App() {
   const [streakBreaker, setStreakBreaker] = useState<HistoryEntry|null>(null)
   const [hintLevel,   setHintLevel]   = useState<0|1|2>(0)
   const [solving,     setSolving]     = useState(false)
+  // Promoción diferida: cuando el user arrastra un peón a la última fila,
+  // handleMove setea esto y espera. El PromotionSelector overlay se muestra
+  // sobre el tablero; al elegir pieza se re-llama a handleMove con la letra.
+  const [promotionPending, setPromotionPending] = useState<{orig:string,dest:string} | null>(null)
+  // Incrementar este contador fuerza a ChessBoard a re-aplicar la posición
+  // visual desde el FEN (snap-back tras cancelar una promoción).
+  const [boardResetSignal, setBoardResetSignal] = useState(0)
   // Prompt post-sesión: lo cerramos por el resto de la pestaña al primer
   // "Ahora no". Si el usuario refresca, vuelve a aparecer (cuando aplique).
   const [promptDismissed, setPromptDismissed] = useState(() =>
@@ -2384,6 +2769,9 @@ export default function App() {
     setAttempts(0)
     setHintLevel(0)
     setSolving(false)
+    // Si venía un selector de promoción abierto de un puzzle anterior
+    // (edge case: skip mientras estaba abierto), cerrarlo.
+    setPromotionPending(null)
   }, [puzzle?.id])
 
   // Resetear pista cuando avanza el moveIdx (cada nueva jugada del usuario)
@@ -2612,17 +3000,44 @@ export default function App() {
     finally { setLoading(false) }
   }, [])
 
-  const advanceToNext = useCallback(() => {
+  // asSkip=true: intento de marcar el puzzle actual como 'skipped' antes
+  // de avanzar. Sólo se agrega a history si el puzzle todavía no fue
+  // resuelto ni fallado — el botón "Siguiente →" de práctica se dispara
+  // también tras un 'ok', y en ese caso no queremos duplicarlo como skip.
+  const advanceToNext = useCallback((asSkip = false) => {
+    if (asSkip && puzzle) {
+      setHistory(h =>
+        h[h.length - 1]?.id === puzzle.id
+          ? h
+          : [...h, { ...puzzle, result: 'skipped' }]
+      )
+    }
     setPuzzleCount(c => c + 1)
     nextRef.current = setTimeout(() => loadNext(), 50)
-  }, [loadNext])
+  }, [loadNext, puzzle])
 
-  const handleMove = useCallback((orig: string, dest: string) => {
+  const handleMove = useCallback((orig: string, dest: string, promotion?: 'q'|'r'|'b'|'n') => {
     if (feedback !== 'idle' || !puzzle || !chessRef.current || loading || solving) return
     if (mode === 'storm' && !timerStarted) setTimerStarted(true)
 
+    // Detección de promoción: si la jugada es un peón llegando a última fila
+    // y el caller NO especificó pieza, abrimos el selector y esperamos.
+    // resolvePromotion() vuelve a llamar a handleMove con la pieza elegida.
+    if (!promotion) {
+      const piece = chessRef.current.get(orig as never)
+      const destRank = dest[1]
+      const isPromo = piece?.type === 'p' && (
+        (piece.color === 'w' && destRank === '8') ||
+        (piece.color === 'b' && destRank === '1')
+      )
+      if (isPromo) {
+        setPromotionPending({ orig, dest })
+        return
+      }
+    }
+
     const expected  = puzzle.solution[moveIdx]
-    const userMove  = orig + dest
+    const userMove  = orig + dest + (promotion ?? '')
     const isCorrect = validateMove(currentFen, userMove, expected)
 
     if (!isCorrect) {
@@ -2661,7 +3076,7 @@ export default function App() {
     }
 
     try {
-      chessRef.current.move({ from: orig, to: dest, promotion: 'q' })
+      chessRef.current.move({ from: orig, to: dest, promotion: promotion ?? 'q' })
     } catch { return }
 
     const nextMoveIdx = moveIdx + 1
@@ -2698,6 +3113,20 @@ export default function App() {
       playMove()
     }, 300)
   }, [mode, feedback, puzzle, loading, solving, moveIdx, currentFen, advanceToNext, timerStarted])
+
+  // Selector de promoción: continuación de handleMove con la pieza elegida.
+  const resolvePromotion = useCallback((piece: 'q'|'r'|'b'|'n') => {
+    if (!promotionPending) return
+    const { orig, dest } = promotionPending
+    setPromotionPending(null)
+    handleMove(orig, dest, piece)
+  }, [promotionPending, handleMove])
+
+  // Cancelar promoción: descartar la jugada y snap-back visual del peón.
+  const cancelPromotion = useCallback(() => {
+    setPromotionPending(null)
+    setBoardResetSignal(s => s + 1)
+  }, [])
 
   const startSession = useCallback(async () => {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
@@ -2738,6 +3167,16 @@ export default function App() {
     clearInterval(timerRef.current!); clearTimeout(nextRef.current!)
     setScreen('results')
 
+    // Si la sesión termina con un puzzle activo sin resolver (típicamente
+    // timeout de Storm), lo marcamos como 'skipped' para que aparezca en
+    // "Revisar errores"/"Revisar todos". No afecta scoreErr ni la tabla
+    // session_errors (skipped ≠ err para el score).
+    const alreadyLogged = puzzle && history[history.length - 1]?.id === puzzle.id
+    const effectiveHistory: HistoryEntry[] = (puzzle && !alreadyLogged)
+      ? [...history, { ...puzzle, result: 'skipped' }]
+      : history
+    if (effectiveHistory !== history) setHistory(effectiveHistory)
+
     // Contador de sesiones de invitado en localStorage — gatilla el prompt
     // post-sesión que ofrece guardar el progreso con Google después de la
     // segunda partida. No incrementamos para usuarios logueados (se guarda
@@ -2763,7 +3202,7 @@ export default function App() {
         puzzles_seen: seenIds.current,
         started_at:   sessionStart.current,
       }
-      const errIds = history.filter(h => h.result === 'err').map(h => h.id)
+      const errIds = effectiveHistory.filter(h => h.result === 'err').map(h => h.id)
       const sessionId = await saveSession(sessionData)
 
       if (sessionId) {
@@ -2779,7 +3218,7 @@ export default function App() {
       if (mode === 'storm')  getBestScores(authUser.id, 'storm').then(setBestScores).catch(() => {})
       if (mode === 'streak') getBestScores(authUser.id, 'streak').then(setBestStreaks).catch(() => {})
     }
-  }, [authUser, isGuest, mode, minutes, selectedThemes, selectedOpenings, minRating, maxRating, scoreOk, scoreErr, history])
+  }, [authUser, isGuest, mode, minutes, selectedThemes, selectedOpenings, minRating, maxRating, scoreOk, scoreErr, history, puzzle])
 
   // Mantener el ref actualizado para que timer y streak handler puedan llamar endSess
   endSessRef.current = endSess
@@ -2907,13 +3346,23 @@ export default function App() {
     catch (e) { console.error('Error iniciando Lichess OAuth:', e) }
   }, [])
 
-  // Review (practicar errores)
+  // Review (analizar puzzles de la sesión con motor Stockfish).
+  // 'errors' incluye errores (err) y saltados/timeout (skipped); 'all'
+  // incluye todos los puzzles que se vieron en la sesión.
   const [reviewIdx, setReviewIdx] = useState(0)
-  const reviewPuzzles = history.filter(h => h.result === 'err')
-  const startReview = useCallback(() => {
-    if (reviewPuzzles.length === 0) return
-    setReviewIdx(0); setAppState('review')
-  }, [reviewPuzzles.length])
+  const [reviewFilter, setReviewFilter] = useState<'errors'|'all'>('errors')
+  const reviewPuzzles = reviewFilter === 'all'
+    ? history
+    : history.filter(h => h.result === 'err' || h.result === 'skipped')
+  const startReview = useCallback((filter: 'errors'|'all') => {
+    const list = filter === 'all'
+      ? history
+      : history.filter(h => h.result === 'err' || h.result === 'skipped')
+    if (list.length === 0) return
+    setReviewFilter(filter)
+    setReviewIdx(0)
+    setAppState('review')
+  }, [history])
   const nextReview = useCallback(() => {
     setReviewIdx(i => {
       const next = i + 1
@@ -2980,13 +3429,17 @@ export default function App() {
         hintLevel={hintLevel}
         hintMove={puzzle?.solution[moveIdx]}
         solving={solving}
+        promotionPending={promotionPending}
+        onPromote={resolvePromotion}
+        onCancelPromote={cancelPromotion}
+        boardResetSignal={boardResetSignal}
         onRetry={loadNext}
-        onMove={handleMove} onEnd={endSess} onSkip={advanceToNext}
+        onMove={handleMove} onEnd={endSess} onSkip={() => advanceToNext(true)}
         onHint={requestHint} onSolution={playSolution}
       />
     )
   } else if (appState === 'review') {
-    inner = <ReviewScreen puzzles={reviewPuzzles} idx={reviewIdx} onNext={nextReview} onBack={backToResults} />
+    inner = <ReviewScreen puzzles={reviewPuzzles} idx={reviewIdx} filter={reviewFilter} onNext={nextReview} onBack={backToResults} />
   } else {
     // results
     inner = (
