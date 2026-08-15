@@ -84,6 +84,9 @@ export class StockfishEngine {
   private readyResolve: (() => void) | null = null
   private readyPromise: Promise<void>
   private disposed = false
+  // Guardamos el último info emitido para poder marcar "done" preservando
+  // cp/mate/depth cuando llega el `bestmove` (sino la barra vuelve al medio).
+  private lastInfo: EvalInfo | null = null
 
   constructor() {
     this.readyPromise = new Promise<void>((resolve, reject) => {
@@ -121,6 +124,7 @@ export class StockfishEngine {
     if (this.disposed || !this.worker) return
     const depth = opts.depth ?? 14
     this.currentFen = fen
+    this.lastInfo = null   // arranca análisis nuevo — evitar reusar eval de otra posición
     this.worker.postMessage('stop')
     this.worker.postMessage(`position fen ${fen}`)
     this.worker.postMessage(`go depth ${depth}`)
@@ -163,15 +167,23 @@ export class StockfishEngine {
     if (line.startsWith('info ')) {
       if (!this.currentFen || !this.listener) return
       const info = parseInfoLine(line, this.currentFen)
-      if (info) this.listener(info)
+      if (info) {
+        this.lastInfo = info
+        this.listener(info)
+      }
       return
     }
     if (line.startsWith('bestmove ')) {
       const bm = line.split(/\s+/)[1]
-      if (this.currentFen && this.listener && bm && bm !== '(none)') {
+      // Preservamos cp/mate/depth del último info emitido — un evento con
+      // depth:0 y sin score borraría el termómetro y lo tiraría al medio.
+      // Si no había un info previo (bestmove inmediato), no emitimos.
+      if (this.currentFen && this.listener && bm && bm !== '(none)' && this.lastInfo) {
         this.listener({
-          fen: this.currentFen, depth: 0, pv: [bm],
-          bestMove: bm, done: true,
+          ...this.lastInfo,
+          pv:       [bm, ...this.lastInfo.pv.slice(1)],
+          bestMove: bm,
+          done:     true,
         })
       }
       return
