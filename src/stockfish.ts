@@ -1,9 +1,10 @@
 // ══ Stockfish (motor de análisis) ═════════════════════════════════════════════
 //
-// Wrapper sobre stockfish.js@10.0.2 (build puro JS, sin WASM ni
-// SharedArrayBuffer — corre en cualquier browser sin headers COOP/COEP y va
-// bien con la PWA offline). El archivo del motor vive en
-// public/stockfish/stockfish.js y se carga como Web Worker clásico.
+// Wrapper sobre stockfish.js@10.0.2. Preferimos el build WASM
+// (public/stockfish/stockfish.wasm.js + stockfish.wasm, ~10x más rápido
+// que el JS puro) y caemos a stockfish.js si el browser no soporta WASM.
+// Los dos builds son single-threaded, así que no necesitan
+// SharedArrayBuffer ni headers COOP/COEP — funciona con la PWA offline.
 //
 // El motor sigue el protocolo UCI. Nosotros mandamos strings (`uci`,
 // `position fen ...`, `go depth ...`, `stop`) y parseamos las respuestas.
@@ -34,7 +35,18 @@ export interface EvalInfo {
 }
 
 interface AnalyzeOptions {
-  depth?: number   // Profundidad máxima (default 18)
+  depth?: number   // Profundidad máxima (default 14 — suficiente para training)
+}
+
+// Detección de soporte WASM. Todo browser moderno lo soporta; solo cae al
+// build JS puro en entornos muy viejos o Safari con WASM deshabilitado.
+function detectWasm(): boolean {
+  try {
+    if (typeof WebAssembly !== 'object') return false
+    return WebAssembly.validate(new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ]))
+  } catch { return false }
 }
 
 // Parsea una línea `info depth ... score ... pv ...`.
@@ -77,7 +89,10 @@ export class StockfishEngine {
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve
       try {
-        this.worker = new Worker('/stockfish/stockfish.js')
+        const enginePath = detectWasm()
+          ? '/stockfish/stockfish.wasm.js'
+          : '/stockfish/stockfish.js'
+        this.worker = new Worker(enginePath)
         this.worker.onmessage = (e) => this.handleMessage(String(e.data))
         this.worker.onerror = (e) => {
           console.error('Stockfish worker error:', e)
@@ -96,19 +111,26 @@ export class StockfishEngine {
   onEval(cb: (info: EvalInfo) => void) { this.listener = cb }
 
   // Cancela el análisis en curso y arranca uno nuevo para `fen`.
+  // NO limpiamos el hash con `ucinewgame` entre movidas de un mismo
+  // análisis — mantener las tablas hace que posiciones relacionadas
+  // (típicamente el siguiente move a explorar) evalúen mucho más rápido.
+  // Sólo se limpia el hash entre puzzles distintos, via newGame().
   async analyze(fen: string, opts: AnalyzeOptions = {}) {
     if (this.disposed) return
     await this.readyPromise
     if (this.disposed || !this.worker) return
-    const depth = opts.depth ?? 18
+    const depth = opts.depth ?? 14
     this.currentFen = fen
-    // `stop` aborta el análisis anterior (si estaba corriendo). `ucinewgame`
-    // resetea el hash — sin esto Stockfish acumula tablas de posiciones
-    // pasadas y puede dar evals inconsistentes al saltar entre puzzles.
     this.worker.postMessage('stop')
-    this.worker.postMessage('ucinewgame')
     this.worker.postMessage(`position fen ${fen}`)
     this.worker.postMessage(`go depth ${depth}`)
+  }
+
+  // Reset del hash del motor — llamar entre puzzles distintos.
+  newGame() {
+    if (this.disposed || !this.worker) return
+    this.worker.postMessage('stop')
+    this.worker.postMessage('ucinewgame')
   }
 
   stop() {

@@ -28,13 +28,19 @@ interface ChessBoardProps {
   // (chessground ya movió la pieza visualmente pero el FEN sigue siendo
   // el de antes) y queremos snap-back sin re-montar el componente.
   resetSignal?: number
+  // UCI de la última movida (para que chessground pinte las casillas
+  // orig+dest con su highlight built-in — sutil, no invasivo).
+  lastMove?: string
 }
 
 export function ChessBoard({
   fen, orientation = 'white', turn = 'white', onMove, feedback,
   dests, showDests = false, wrongRevertDelay = 0, hintLevel = 0, hintMove,
-  extraShapes, inputLocked = false, resetSignal = 0,
+  extraShapes, inputLocked = false, resetSignal = 0, lastMove,
 }: ChessBoardProps) {
+  const lastMoveKeys: [Key, Key] | undefined = lastMove && lastMove.length >= 4
+    ? [lastMove.slice(0, 2) as Key, lastMove.slice(2, 4) as Key]
+    : undefined
   const containerRef = useRef<HTMLDivElement>(null)
   const cgRef        = useRef<Api | null>(null)
   const onMoveRef    = useRef(onMove)
@@ -62,6 +68,7 @@ export function ChessBoard({
       orientation,
       turnColor: turn,
       coordinates: true,
+      lastMove: lastMoveKeys,
       movable: {
         color: turn,
         free:  false,        // only allow legal moves; invalid clicks deselect
@@ -89,6 +96,7 @@ export function ChessBoard({
         fen,
         orientation,
         turnColor: turn,
+        lastMove: lastMoveKeys,
         movable: {
           color: (feedback === 'idle' && !inputLocked) ? turn : undefined,
           dests: dests ?? new Map(),
@@ -111,7 +119,7 @@ export function ChessBoard({
     // fuerza al effect a re-correr y re-aplicar el fen (snap-back tras cancelar
     // una promoción, por ejemplo).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fen, orientation, turn, feedback, dests, showDests, wrongRevertDelay, hintLevel, hintMove, extraShapes, inputLocked, resetSignal])
+  }, [fen, orientation, turn, feedback, dests, showDests, wrongRevertDelay, hintLevel, hintMove, extraShapes, inputLocked, resetSignal, lastMove])
 
   const ring =
     feedback === 'correct' ? 'ring-2 ring-[#6dbf6d] ring-offset-2 ring-offset-[#0e0d0b]' :

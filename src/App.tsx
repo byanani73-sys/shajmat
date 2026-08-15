@@ -2035,6 +2035,9 @@ function ReviewScreen({ puzzles, idx, filter, onNext, onBack }: {
     setPlayingSolution(false)
     setPromotionPending(null)
     setEvalInfo(null)
+    // Limpiar el hash del motor entre puzzles distintos — dentro de un
+    // mismo puzzle mantenemos el hash para acelerar movidas relacionadas.
+    engineRef.current?.newGame()
   }, [puzzle?.id])
 
   const currentNode = nodes[nodeIdx]
@@ -2055,7 +2058,7 @@ function ReviewScreen({ puzzles, idx, filter, onNext, onBack }: {
     if (!currentFen) return
     if (!engineReady || !engineRef.current) return
     if (!evalOn && !arrowOn) return
-    engineRef.current.analyze(currentFen, { depth: 18 })
+    engineRef.current.analyze(currentFen, { depth: 14 })
   }, [currentFen, engineReady, evalOn, arrowOn])
 
   // ── handleMove: jugar libre (side-to-move) ──
@@ -2187,28 +2190,34 @@ function ReviewScreen({ puzzles, idx, filter, onNext, onBack }: {
     return [{ orig: pv.slice(0, 2) as Key, dest: pv.slice(2, 4) as Key, brush: 'blue' }]
   })()
 
-  // Last-move highlight (rectángulos verdes) para el movimiento visible actual
-  const lastMoveShapes: DrawShape[] = (() => {
-    const uci = currentNode?.uci
-    if (!uci || uci.length < 4) return []
-    return [
-      { orig: uci.slice(0, 2) as Key, brush: 'yellow' },
-      { orig: uci.slice(2, 4) as Key, brush: 'yellow' },
-    ]
-  })()
+  // La última movida ejecutada se pinta con el highlight built-in de
+  // chessground (fondo sutil sobre las casillas orig+dest) — más limpio
+  // que dibujar círculos superpuestos con los shapes.
+  const lastMoveUci = currentNode?.uci ?? undefined
 
-  // Feedback strip
+  // Feedback strip. Si el eval que tenemos es de otra posición (todavía no
+  // llegó el análisis nuevo), lo mostramos "stale" en gris — mejor que pelar
+  // el número y mostrar "Analizando..." vacío.
+  const evalFresh = evalOn && evalInfo && evalInfo.fen === currentFen
+  const evalStale = evalOn && evalInfo && evalInfo.fen !== currentFen
   const evalText = engineError
     ? 'Motor no disponible'
-    : (evalOn && evalInfo && evalInfo.fen === currentFen)
-      ? `${formatEval(evalInfo)} · d${evalInfo.depth}`
-      : (evalOn && engineReady)
-        ? 'Analizando...'
-        : ''
+    : evalFresh
+      ? `${formatEval(evalInfo)} · d${evalInfo!.depth}`
+      : evalStale
+        ? `${formatEval(evalInfo)} · pensando...`
+        : (evalOn && engineReady)
+          ? 'Analizando...'
+          : ''
+  const evalColor = engineError ? C.red
+                  : evalFresh    ? C.text
+                  : C.faint
 
-  const barFraction = (evalOn && evalInfo && evalInfo.fen === currentFen)
+  const barFraction = evalFresh
     ? evalToBarFraction(evalInfo)
-    : 0.5
+    : evalStale
+      ? evalToBarFraction(evalInfo)  // seguimos mostrando la última barra conocida
+      : 0.5
 
   // ── Board area ──
   const boardWidth = desktop ? '580px' : undefined
@@ -2247,7 +2256,8 @@ function ReviewScreen({ puzzles, idx, filter, onNext, onBack }: {
               onMove={handleMove}
               feedback="idle"
               showDests
-              extraShapes={[...bestMoveArrow, ...lastMoveShapes]}
+              extraShapes={bestMoveArrow}
+              lastMove={lastMoveUci}
               inputLocked={!!promotionPending || playingSolution}
               resetSignal={boardResetSignal}
             />
@@ -2267,7 +2277,7 @@ function ReviewScreen({ puzzles, idx, filter, onNext, onBack }: {
       {/* Feedback strip: turno + eval */}
       <div style={{ marginTop:10, padding:'4px 0', borderRadius:10, fontSize:13, color:C.muted, minHeight:36, display:'flex', alignItems:'center', gap:12, justifyContent:'space-between' }}>
         <span>{turnLabel}</span>
-        {evalText && <span style={{ ...mono, fontSize:12, color: engineError ? C.red : C.text }}>{evalText}</span>}
+        {evalText && <span style={{ ...mono, fontSize:12, color: evalColor }}>{evalText}</span>}
       </div>
 
       {/* Move navigation strip */}
