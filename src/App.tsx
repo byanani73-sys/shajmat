@@ -26,16 +26,9 @@ import { THEME_GROUPS, OPENING_GROUPS, ALL_OPENINGS, buildFiltersFromSelection, 
 import { PromotionSelector, type PromoPiece } from './PromotionSelector'
 import { StockfishEngine, formatEval, evalToBarFraction, type EvalInfo } from './stockfish'
 import type { DrawShape } from 'chessground/draw'
+import { WoodpeckerSection } from './WoodpeckerScreens'
 
-function useIsDesktop() {
-  const [desktop, setDesktop] = useState(() => window.innerWidth >= 768)
-  useEffect(() => {
-    const fn = () => setDesktop(window.innerWidth >= 768)
-    window.addEventListener('resize', fn)
-    return () => window.removeEventListener('resize', fn)
-  }, [])
-  return desktop
-}
+// useIsDesktop se importa de ./design (compartido con WoodpeckerScreens)
 
 type AppState = 'init' | 'login' | 'config' | 'preparing' | 'storm' | 'results' | 'review' | 'dashboard'
 type Feedback = 'idle' | 'thinking' | 'correct' | 'wrong'
@@ -92,37 +85,9 @@ function validateMove(currentFen: string, userMoveUci: string, expectedUci: stri
   }
 }
 
-// ─── Design tokens ────────────────────────────────────────────────────────────
-const C = {
-  bg:        '#0e0d0b',
-  surface:   '#1b1915',
-  surface2:  '#232018',
-  border:    'rgba(255,255,255,0.08)',
-  borderAm:  'rgba(193,127,42,0.25)',
-  text:      '#f7f4ef',
-  muted:     'rgba(247,244,239,0.4)',
-  faint:     'rgba(247,244,239,0.15)',
-  amber:     '#c17f2a',
-  amberBg:   'rgba(193,127,42,0.12)',
-  correct:   '#6dbf6d',
-  correctBg: 'rgba(109,191,109,0.12)',
-  red:       '#e05252',
-  redBg:     'rgba(224,82,82,0.1)',
-}
-
-// ── REGLA DE CONTRASTE — leer antes de usar colores de texto ──────────────
-// C.text    (#f7f4ef)        → texto principal, títulos, valores importantes
-// C.muted   (opacity 0.4)   → labels, subtítulos, texto secundario LEGIBLE
-//                              usar para: labels de sección, hints, descriptions
-// C.faint   (opacity 0.15)  → solo para elementos casi invisibles intencionales
-//                              usar ÚNICAMENTE para: IDs de puzzle (#xyz),
-//                              marca de agua Shin (ש), easter eggs
-//                              NO usar para ningún texto que el usuario deba leer
-// ─────────────────────────────────────────────────────────────────────────
-
-const mono   = { fontFamily:"'DM Mono', monospace" }
-const cinzel = { fontFamily:"'Cinzel', serif" }
-const fmt    = (s: number) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`
+// ─── Design tokens: importados desde src/design.ts ────────────────────────
+// Se re-exportan para no romper referencias existentes en este archivo.
+import { C, mono, cinzel, fmtTime as fmt, useIsDesktop } from './design'
 
 // ─── Shajmat mark (logo B — tres trazos con curl) ─────────────────────────────
 function ShajmatMark({ size = 40, color = C.amber }: { size?: number; color?: string }) {
@@ -252,7 +217,7 @@ const SECTIONS: { id: Section; label: string; group: 'train' | 'tools' }[] = [
 
 const SECTION_DESCRIPTIONS: Record<Section, string> = {
   train:      '',
-  woodpecker: 'Repetición espaciada de tus puzzles más difíciles. Inspirado en el método del Pájaro Carpintero.',
+  woodpecker: 'Método del Pájaro Carpintero: resolvé un set fijo de puzzles y repetilo en 7 ciclos, cada vez más rápido. Cablea el reconocimiento de patrones por repetición.',
   analysis:   'Análisis de tus partidas de lichess y detección de tus patrones de error',
 }
 
@@ -315,7 +280,15 @@ function Sidebar({
           <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginBottom:8, paddingLeft:6 }}>Herramientas</div>
         )}
         {toolsItems.map(it => (
-          <SidebarItem key={it.id} item={it} active={section===it.id} collapsed={collapsed} pending onClick={() => onSection(it.id)} />
+          <SidebarItem
+            key={it.id}
+            item={it}
+            active={section===it.id}
+            collapsed={collapsed}
+            pending={it.id !== 'woodpecker'}
+            info={it.id === 'woodpecker' ? SECTION_DESCRIPTIONS.woodpecker : undefined}
+            onClick={() => onSection(it.id)}
+          />
         ))}
       </div>
 
@@ -353,12 +326,13 @@ function Sidebar({
 }
 
 function SidebarItem({
-  item, active, collapsed, pending, onClick,
+  item, active, collapsed, pending, info, onClick,
 }: {
   item: { id: Section; label: string }
-  active: boolean; collapsed: boolean; pending?: boolean
+  active: boolean; collapsed: boolean; pending?: boolean; info?: string
   onClick: () => void
 }) {
+  const [showTip, setShowTip] = useState(false)
   return (
     <button onClick={onClick}
       title={collapsed ? item.label : undefined}
@@ -392,6 +366,37 @@ function SidebarItem({
           PRONTO
         </span>
       )}
+      {!collapsed && info && (
+        <span
+          onMouseEnter={() => setShowTip(true)}
+          onMouseLeave={() => setShowTip(false)}
+          onClick={(e) => { e.stopPropagation(); setShowTip(v => !v) }}
+          style={{
+            width:16, height:16, borderRadius:'50%',
+            border:`1px solid ${C.muted}`, color:C.muted,
+            display:'flex', alignItems:'center', justifyContent:'center',
+            fontSize:10, fontFamily:'serif', fontStyle:'italic', fontWeight:700,
+            cursor:'help', flexShrink:0, position:'relative',
+          }}>
+          i
+          {showTip && (
+            <div style={{
+              position:'absolute', left: 'calc(100% + 10px)', top:'50%',
+              transform:'translateY(-50%)',
+              padding:'10px 14px',
+              background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8,
+              color:C.text, fontSize:12, lineHeight:1.5,
+              fontFamily:"'DM Sans',sans-serif", fontWeight:400, fontStyle:'normal',
+              textTransform:'none', letterSpacing:0,
+              width:260, zIndex:200, pointerEvents:'none',
+              boxShadow:'0 8px 30px rgba(0,0,0,0.5)',
+              textAlign:'left',
+            }}>
+              {info}
+            </div>
+          )}
+        </span>
+      )}
     </button>
   )
 }
@@ -407,7 +412,9 @@ function BottomNav({ section, onSection }: { section:Section; onSection:(s:Secti
     }}>
       {SECTIONS.map(s => {
         const active  = section === s.id
-        const pending = s.group === 'tools'
+        // El único que sigue "pending" en el mobile nav es Análisis.
+        // Woodpecker ya está listo.
+        const pending = s.group === 'tools' && s.id !== 'woodpecker'
         return (
           <button key={s.id} onClick={() => onSection(s.id)}
             style={{
@@ -1107,7 +1114,7 @@ function LoginScreen({ onGuest }: { onGuest:()=>void }) {
 }
 
 // ══ Config ════════════════════════════════════════════════════════════════════
-function ThemeModal({ selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, onClose }: {
+export function ThemeModal({ selectedThemes, setSelectedThemes, selectedOpenings, setSelectedOpenings, onClose }: {
   selectedThemes: string[]; setSelectedThemes: (s: string[]) => void
   selectedOpenings: string[]; setSelectedOpenings: (s: string[]) => void
   onClose: () => void
@@ -3389,8 +3396,22 @@ export default function App() {
   )
   if (appState==='login') return <LoginScreen onGuest={goGuest} />
 
-  // Si la sección activa NO es Entrenar, mostrar la pantalla "Próximamente"
-  // del módulo correspondiente (con nav expandido).
+  // Sección Pájaro Carpintero — router propio con lista/create/overview/solving/done.
+  if (section === 'woodpecker') {
+    return (
+      <NavLayout section={section} onSection={handleSection} variant="expanded" user={authUser ?? undefined} onLogout={logout}>
+        <WoodpeckerSection
+          user={authUser}
+          isGuest={isGuest}
+          selectedThemes={selectedThemes} setSelectedThemes={setSelectedThemes}
+          selectedOpenings={selectedOpenings} setSelectedOpenings={setSelectedOpenings}
+          minRating={minRating} maxRating={maxRating} setRatingRange={setRatingRange}
+        />
+      </NavLayout>
+    )
+  }
+
+  // Otras secciones futuras (analysis) siguen mostrando "Próximamente".
   if (section !== 'train') {
     return (
       <NavLayout section={section} onSection={handleSection} variant="expanded" user={authUser ?? undefined} onLogout={logout}>
