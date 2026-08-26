@@ -29,6 +29,12 @@ export default defineConfig({
       workbox: {
         // App shell: HTML, JS, CSS, fuentes locales — CacheFirst (precache)
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest,mp3}"],
+        // Excluir push-sw.js del precache y del glob de request URLs para el
+        // catch-all. Se inyecta via importScripts abajo (no es cache-able como
+        // asset app-shell).
+        globIgnores: ["push-sw.js"],
+        // Inyecta nuestros handlers de push + notificationclick en el SW.
+        importScripts: ["/push-sw.js"],
         runtimeCaching: [
           // Supabase API: NetworkFirst (intentar red, fallback caché si offline)
           {

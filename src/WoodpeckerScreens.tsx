@@ -21,6 +21,7 @@ import { ChessBoard } from './ChessBoard'
 import { PromotionSelector, type PromoPiece } from './PromotionSelector'
 import { StockfishEngine, formatEval, evalToBarFraction, type EvalInfo } from './stockfish'
 import { C, mono, cinzel, useIsDesktop } from './design'
+import { isPushSupported, isSubscribedOnThisDevice, subscribeToPush, unsubscribeFromPush } from './pushNotifications'
 import type { AuthUser } from './auth'
 import { signInWithGoogle } from './auth'
 import { playCorrect, playWrong, playMove } from './sounds'
@@ -604,6 +605,7 @@ function OverviewScreen({ setId, onBack, onStart, onRetry }: {
                 muestra un borde ámbar en el card cuando la fecha ya llegó. */}
             <NextSessionCard
               set={set}
+              userId={set.user_id}
               onUpdate={async (dt) => {
                 await updateSet(set.id, { next_session_at: dt })
                 reload()
@@ -783,11 +785,39 @@ function StatCell({ label, value, color }: { label: string; value: string; color
 // separados para override fino. Cambios se guardan en vivo — sin botón
 // "Guardar" que sea redundante con los inputs. En v1.1 se agrega push;
 // hoy sólo persiste el datetime y la ListScreen resalta cards en fecha.
-function NextSessionCard({ set, onUpdate }: {
+function NextSessionCard({ set, userId, onUpdate }: {
   set: WoodpeckerSet
+  userId: string
   onUpdate: (dt: string | null) => Promise<void>
 }) {
   const [saving, setSaving] = useState(false)
+  // Push notifications state — sólo relevante si el user ya seteó una fecha
+  // (sin fecha, el push no tiene sentido). Chequeamos al montar si el device
+  // actual ya está suscrito.
+  const [pushSupported] = useState(() => isPushSupported())
+  const [pushEnabled, setPushEnabled] = useState<boolean | null>(null)  // null = cargando
+  const [pushBusy,    setPushBusy]    = useState(false)
+  const [pushError,   setPushError]   = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!pushSupported) { setPushEnabled(false); return }
+    isSubscribedOnThisDevice().then(setPushEnabled)
+  }, [pushSupported])
+
+  const togglePush = async () => {
+    setPushBusy(true)
+    setPushError(null)
+    try {
+      if (pushEnabled) {
+        await unsubscribeFromPush(userId)
+        setPushEnabled(false)
+      } else {
+        const r = await subscribeToPush(userId)
+        if (r.ok) setPushEnabled(true)
+        else setPushError(r.error)
+      }
+    } finally { setPushBusy(false) }
+  }
 
   const parsed = set.next_session_at ? new Date(set.next_session_at) : null
   const isPast = parsed ? parsed <= new Date() : false
@@ -915,6 +945,45 @@ function NextSessionCard({ set, onUpdate }: {
             style={{ padding:'8px 10px', borderRadius:8, background:C.surface2, border:`1px solid ${C.border}`, color:C.text, fontSize:12, fontFamily:'inherit' }} />
         </label>
       </div>
+
+      {/* Toggle de push notification — sólo si hay fecha guardada y el
+          browser soporta push. En iOS < 16.4 no soporta a menos que se
+          instale como PWA ("Agregar a inicio"). */}
+      {parsed && (
+        <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:10, display:'flex', flexDirection:'column', gap:8 }}>
+          {!pushSupported ? (
+            <div style={{ ...mono, fontSize:10, color:C.faint, textAlign:'center' }}>
+              Este browser no soporta notificaciones push
+            </div>
+          ) : (
+            <>
+              <label style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, cursor: pushBusy ? 'wait' : 'pointer' }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, color:C.text, fontWeight:600 }}>Recordatorio push</div>
+                  <div style={{ fontSize:11, color:C.muted, marginTop:2, lineHeight:1.4 }}>
+                    Te avisamos en este dispositivo el día de tu sesión.
+                  </div>
+                </div>
+                <button onClick={togglePush} disabled={pushBusy}
+                  style={{
+                    width:36, height:20, borderRadius:10, flexShrink:0,
+                    background: pushEnabled ? C.amber : 'rgba(255,255,255,0.14)',
+                    border:'none', position:'relative', cursor: pushBusy ? 'wait' : 'pointer', padding:0,
+                    opacity: pushEnabled === null ? 0.5 : 1,
+                    transition:'background .15s',
+                  }}>
+                  <div style={{ position:'absolute', top:2, left: pushEnabled ? 18 : 2, width:16, height:16, borderRadius:'50%', background:'#fff', transition:'left .15s' }} />
+                </button>
+              </label>
+              {pushError && (
+                <div style={{ fontSize:11, color:C.red, padding:'6px 10px', background:C.redBg, borderRadius:6, border:`1px solid ${C.red}30`, lineHeight:1.4 }}>
+                  {pushError}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

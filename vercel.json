@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
@@ -13,5 +13,8 @@
         { "key": "Strict-Transport-Security","value": "max-age=63072000; includeSubDomains; preload" }
       ]
     }
+  ],
+  "crons": [
+    { "path": "/api/send-push-reminders", "schedule": "0 12 * * *" }
   ]
 }
