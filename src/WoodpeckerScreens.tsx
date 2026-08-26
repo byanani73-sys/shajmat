@@ -32,9 +32,10 @@ import {
   listSets, getSet, createSet, updateSet,
   getSetPuzzleIds, fetchPuzzlesByIds,
   recordAttempt, loadCycleProgress, getAllCycleStats,
-  listCycleErrors,
+  listCycleErrors, getTopErrorPuzzles,
   closeCurrentCycleAndAdvance, validateMoveUci, fmtDuration, fmtDurationHuman,
   type WoodpeckerSet, type CycleProgress, type CycleStats, type OrderMode,
+  type TopErrorPuzzle,
 } from './woodpecker'
 
 // ─── Router interno ──────────────────────────────────────────────────────────
@@ -487,6 +488,7 @@ function OverviewScreen({ setId, onBack, onStart, onRetry }: {
   const [lastSessionErrors, setLastSessionErrors] = useState<number>(0)
   const [confirmAbandon, setConfirmAbandon] = useState(false)
   const [confirmCloseCycle, setConfirmCloseCycle] = useState(false)
+  const [reviewingPuzzle, setReviewingPuzzle] = useState<TopErrorPuzzle | null>(null)
 
   const reload = useCallback(async () => {
     const s = await getSet(setId)
@@ -649,6 +651,17 @@ function OverviewScreen({ setId, onBack, onStart, onRetry }: {
           </div>
         )}
 
+        {/* Dashboard: gráfico de progreso + puzzles más difíciles */}
+        {stats.length >= 1 && (
+          <>
+            <CycleProgressCharts stats={stats} set={set} />
+            <TopErrorPuzzlesCard setId={setId} onReview={setReviewingPuzzle} />
+          </>
+        )}
+        {reviewingPuzzle && (
+          <PuzzleReviewModal puzzle={reviewingPuzzle} onClose={() => setReviewingPuzzle(null)} />
+        )}
+
         {/* Acciones — cerrar ciclo (más liviano) y abandonar set (destructivo) */}
         {set.status === 'active' && (
           <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:12, alignItems:'center' }}>
@@ -775,6 +788,330 @@ function StatCell({ label, value, color }: { label: string; value: string; color
     <div style={{ textAlign:'center' }}>
       <div style={{ ...mono, fontSize: 20, fontWeight:700, color: color ?? C.text, lineHeight:1 }}>{value}</div>
       <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginTop:4 }}>{label}</div>
+    </div>
+  )
+}
+
+// ══ Dashboard: gráficos de progreso ═══════════════════════════════════════
+//
+// Dos barcharts SVG lado a lado (o apilados en mobile):
+//   1. Tiempo por ciclo con línea horizontal indicando la meta del último ciclo
+//   2. Cantidad de errores por ciclo
+//
+// Sin dependencias externas (Recharts/etc) — SVG puro con animación CSS.
+
+function CycleProgressCharts({ stats, set }: { stats: CycleStats[]; set: WoodpeckerSet }) {
+  const desktop = useIsDesktop()
+
+  // Ciclos con al menos 1 attempt (excluye ciclos futuros vacíos).
+  const cyclesWithData = stats.filter(c => c.attempts > 0)
+  if (cyclesWithData.length === 0) return null
+
+  // Datos para el chart de tiempo
+  const maxMs = Math.max(...cyclesWithData.map(c => c.total_ms), 1)
+  const timeMeta = cyclesWithData.length >= 2
+    ? Math.round(cyclesWithData[cyclesWithData.length - 2].total_ms * (set.time_target_pct / 100))
+    : null
+
+  // Datos para errores
+  const maxErr = Math.max(...cyclesWithData.map(c => c.errors), 1)
+
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 20px' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:16 }}>
+        Progreso · gráficos por ciclo
+      </div>
+      <div style={{ display:'flex', gap: desktop ? 24 : 20, flexDirection: desktop ? 'row' : 'column' }}>
+        <BarChart
+          label="Tiempo por ciclo"
+          data={cyclesWithData.map(c => ({ label: `${c.cycle}`, value: c.total_ms, display: fmtDurationHuman(c.total_ms) }))}
+          color={C.amber}
+          maxValue={maxMs}
+          referenceLine={timeMeta ? { value: timeMeta, label: `meta ${fmtDurationHuman(timeMeta)}` } : undefined}
+        />
+        <BarChart
+          label="Errores por ciclo"
+          data={cyclesWithData.map(c => ({ label: `${c.cycle}`, value: c.errors, display: String(c.errors) }))}
+          color={C.red}
+          maxValue={maxErr}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ── Barchart SVG minimalista ─────────────────────────────────────────────
+// Datos: array de {label, value, display}. Value se usa para la altura;
+// display es lo que se muestra sobre la barra (puede ser formateado).
+interface BarDatum { label: string; value: number; display: string }
+interface BarChartProps {
+  label:         string
+  data:          BarDatum[]
+  color:         string
+  maxValue:      number
+  referenceLine?: { value: number; label: string }
+}
+function BarChart({ label, data, color, maxValue, referenceLine }: BarChartProps) {
+  const width  = 320
+  const height = 140
+  const padTop    = 20  // espacio arriba para el valor de la barra
+  const padBot    = 20  // espacio abajo para el label
+  const chartH = height - padTop - padBot
+  const barGap = 6
+  const barW   = Math.max(12, (width - barGap * (data.length - 1)) / data.length)
+  const yScale = (v: number) => chartH * (v / maxValue)
+
+  const refY = referenceLine ? padTop + chartH - yScale(referenceLine.value) : null
+
+  return (
+    <div style={{ flex:1, minWidth:0 }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginBottom:8 }}>
+        {label}
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width:'100%', height:'auto', display:'block' }}>
+        {/* Línea de referencia (meta) */}
+        {refY !== null && referenceLine && (
+          <>
+            <line
+              x1={0} x2={width} y1={refY} y2={refY}
+              stroke={C.amber} strokeWidth={1} strokeDasharray="4 3" opacity={0.7}
+            />
+            <text
+              x={width - 4} y={refY - 4} fontSize={9} fill={C.amber} textAnchor="end"
+              fontFamily="'DM Mono', monospace" letterSpacing="1"
+            >
+              {referenceLine.label}
+            </text>
+          </>
+        )}
+        {/* Barras */}
+        {data.map((d, i) => {
+          const x = i * (barW + barGap)
+          const h = yScale(d.value)
+          const y = padTop + chartH - h
+          return (
+            <g key={i}>
+              <rect
+                x={x} y={y} width={barW} height={h}
+                fill={color} rx={2}
+                opacity={0.9}
+              />
+              <text
+                x={x + barW / 2} y={y - 4}
+                fontSize={9} fill={C.text} textAnchor="middle"
+                fontFamily="'DM Mono', monospace"
+              >
+                {d.display}
+              </text>
+              <text
+                x={x + barW / 2} y={height - 6}
+                fontSize={9} fill={C.muted} textAnchor="middle"
+                fontFamily="'DM Mono', monospace"
+              >
+                #{d.label}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+// ══ Dashboard: puzzles con más errores ═══════════════════════════════════
+// Top 10 puzzles del set con más errores (across ciclos). Click abre un
+// modal read-only con el board + solución para repasar la posición.
+
+function TopErrorPuzzlesCard({ setId, onReview }: { setId: string; onReview: (p: TopErrorPuzzle) => void }) {
+  const [items,   setItems]   = useState<TopErrorPuzzle[] | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    getTopErrorPuzzles(setId, 10)
+      .then(r => { if (alive) { setItems(r); setLoading(false) } })
+    return () => { alive = false }
+  }, [setId])
+
+  if (loading) return null
+  if (!items || items.length === 0) return null  // sin errores acumulados, sección oculta
+
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 20px' }}>
+      <div style={{ ...mono, fontSize:9, letterSpacing:3, textTransform:'uppercase', color:C.muted, marginBottom:14 }}>
+        Puzzles que más te cuestan
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+        {items.map((p, i) => {
+          const accuracy = p.total_attempts > 0
+            ? Math.round((1 - p.errors / p.total_attempts) * 100)
+            : 0
+          return (
+            <button key={p.position} onClick={() => onReview(p)}
+              style={{
+                display:'flex', alignItems:'center', gap:12, padding:'10px 12px',
+                background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10,
+                color:C.text, cursor:'pointer', textAlign:'left',
+                fontFamily:"'DM Sans',sans-serif",
+              }}>
+              <div style={{ ...mono, fontSize:11, color:C.faint, width:22, flexShrink:0 }}>#{i + 1}</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:C.text, marginBottom:2 }}>
+                  {p.theme} <span style={{ ...mono, fontSize:10, color:C.muted, marginLeft:6 }}>ELO {p.rating}</span>
+                </div>
+                <div style={{ ...mono, fontSize:10, color:C.muted }}>
+                  {p.errors} error{p.errors !== 1 && 'es'} de {p.total_attempts} intento{p.total_attempts !== 1 && 's'} · {accuracy}% aciertos
+                </div>
+              </div>
+              <div style={{ ...mono, fontSize:10, letterSpacing:1, textTransform:'uppercase', color:C.amber, flexShrink:0 }}>
+                Ver →
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ══ Modal: review de un puzzle ═══════════════════════════════════════════
+// Simple: chessboard con el FEN inicial + solución en SAN + animación
+// opcional. Sin motor (para eso está la exploración post-error del solving).
+
+function PuzzleReviewModal({ puzzle, onClose }: { puzzle: TopErrorPuzzle; onClose: () => void }) {
+  const [fen,      setFen]      = useState(puzzle.fen)
+  const [playing,  setPlaying]  = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  const orientation: 'white' | 'black' = puzzle.fen.split(' ')[1] === 'w' ? 'white' : 'black'
+  const turn: 'white' | 'black' = fen.split(' ')[1] === 'w' ? 'white' : 'black'
+
+  // Convertir la solución UCI a SAN (para display)
+  const solutionSan: string[] = (() => {
+    try {
+      const c = new Chess(puzzle.fen)
+      return puzzle.solution.map(uci => {
+        const m = c.move({
+          from: uci.slice(0, 2), to: uci.slice(2, 4),
+          promotion: uci.length > 4 ? (uci[4] as 'q'|'r'|'b'|'n') : undefined,
+        })
+        return m?.san ?? uci
+      })
+    } catch { return puzzle.solution }
+  })()
+
+  const reset = () => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    setPlaying(false)
+    setFen(puzzle.fen)
+  }
+
+  const playSolution = () => {
+    if (playing) return
+    reset()
+    setPlaying(true)
+    const c = new Chess(puzzle.fen)
+    let step = 0
+    const playStep = () => {
+      if (step >= puzzle.solution.length) { setPlaying(false); return }
+      const uci = puzzle.solution[step]
+      try {
+        c.move({
+          from: uci.slice(0, 2), to: uci.slice(2, 4),
+          promotion: uci.length > 4 ? (uci[4] as 'q'|'r'|'b'|'n') : undefined,
+        })
+        setFen(c.fen())
+      } catch { setPlaying(false); return }
+      step += 1
+      timerRef.current = setTimeout(playStep, 700)
+    }
+    timerRef.current = setTimeout(playStep, 300)
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position:'fixed', inset:0, zIndex:100, background:'rgba(0,0,0,0.6)',
+      display:'flex', alignItems:'center', justifyContent:'center', padding:16,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:C.surface, border:`1px solid ${C.border}`, borderRadius:14,
+        padding:'20px 22px', maxWidth:480, width:'100%', color:C.text,
+        fontFamily:"'DM Sans',system-ui,sans-serif", maxHeight:'90vh', overflowY:'auto',
+      }}>
+        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:12, gap:12 }}>
+          <div>
+            <div style={{ ...cinzel, fontSize:15, fontWeight:700, letterSpacing:2, color:C.text }}>
+              REPASAR PUZZLE
+            </div>
+            <div style={{ ...mono, fontSize:10, letterSpacing:1, textTransform:'uppercase', color:C.muted, marginTop:2 }}>
+              {puzzle.theme} · ELO {puzzle.rating} · fallado {puzzle.errors} vez{puzzle.errors !== 1 && 'es'}
+            </div>
+          </div>
+          <button onClick={onClose}
+            style={{ ...mono, fontSize:12, color:C.muted, background:'none', border:'none', cursor:'pointer', padding:4 }}>
+            ×
+          </button>
+        </div>
+
+        {/* Tablero read-only con el fen actual */}
+        <div style={{ borderRadius:8, overflow:'hidden', boxShadow:'0 8px 40px rgba(0,0,0,.5)', marginBottom:12 }}>
+          <ChessBoard
+            fen={fen}
+            orientation={orientation}
+            turn={turn}
+            dests={new Map()}
+            onMove={() => {}}
+            feedback="idle"
+            inputLocked={true}
+          />
+        </div>
+
+        <div style={{ fontSize:12, color:C.muted, marginBottom:12, textAlign:'center' }}>
+          {turn === 'white' ? 'Blancas' : 'Negras'} juegan
+        </div>
+
+        {/* Solución en SAN */}
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 14px', marginBottom:12 }}>
+          <div style={{ ...mono, fontSize:9, letterSpacing:2, textTransform:'uppercase', color:C.muted, marginBottom:6 }}>Solución</div>
+          <div style={{ ...mono, fontSize:14, color:C.text, fontWeight:600 }}>
+            {solutionSan.map((san, i) => {
+              // Numeración: siempre en pareja (1. w b   2. w b ...)
+              const moveNum = Math.floor(i / 2) + 1
+              const isFirst = i % 2 === 0
+              const startsWithWhite = orientation === 'white'
+              return (
+                <span key={i}>
+                  {isFirst && startsWithWhite && `${moveNum}. `}
+                  {isFirst && !startsWithWhite && i === 0 && `${moveNum}... `}
+                  {isFirst && !startsWithWhite && i > 0 && `${moveNum}. `}
+                  {san}{' '}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Acciones */}
+        <div style={{ display:'flex', gap:8 }}>
+          <button onClick={playSolution} disabled={playing}
+            style={{ flex:1, padding:'11px', borderRadius:10, background:C.amber, border:'none', color:C.bg, fontSize:13, fontWeight:700, fontFamily:'inherit', cursor: playing ? 'not-allowed' : 'pointer', opacity: playing ? 0.5 : 1 }}>
+            {playing ? 'Mostrando...' : 'Animar solución'}
+          </button>
+          <button onClick={reset}
+            style={{ flex:1, padding:'11px', borderRadius:10, background:C.surface2, border:`1px solid ${C.border}`, color:C.muted, fontSize:13, fontWeight:500, fontFamily:'inherit', cursor:'pointer' }}>
+            Reiniciar
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

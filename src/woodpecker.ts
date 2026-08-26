@@ -299,6 +299,101 @@ export async function listCycleAttempts(setId: string, cycle: number): Promise<A
   return (data ?? []) as Attempt[]
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Dashboard: top puzzles con más errores acumulados en el set.
+// ═════════════════════════════════════════════════════════════════════════════
+
+export interface TopErrorPuzzle {
+  position:     number
+  puzzle_id:    string
+  rating:       number
+  theme:        string
+  fen:          string
+  solution:     string[]
+  errors:       number          // count de attempts non-retry con correct=false
+  total_attempts: number        // count total (para calcular %)
+  cycles_with_error: number[]   // en qué ciclos se falló al menos una vez
+}
+
+// Devuelve los top-N puzzles del set con más errores acumulados (non-retry),
+// enriquecidos con datos del puzzle (fen, solution, rating, theme) para
+// permitir al user abrirlo en modo análisis desde el dashboard.
+export async function getTopErrorPuzzles(setId: string, limit = 10): Promise<TopErrorPuzzle[]> {
+  // 1) Traer todos los attempts non-retry del set + sus positions/puzzle_id
+  const { data: attempts, error: errA } = await supabase
+    .from('woodpecker_attempts')
+    .select('position, puzzle_id, correct, cycle_number')
+    .eq('set_id', setId)
+    .eq('is_retry', false)
+  if (errA) { console.error('getTopErrorPuzzles/attempts:', errA); return [] }
+
+  // 2) Agregar por (position, puzzle_id)
+  const agg = new Map<string, { position: number; puzzle_id: string; errors: number; total: number; cyclesErr: Set<number> }>()
+  for (const a of attempts ?? []) {
+    const key = String(a.position)
+    let bucket = agg.get(key)
+    if (!bucket) {
+      bucket = { position: a.position as number, puzzle_id: a.puzzle_id as string, errors: 0, total: 0, cyclesErr: new Set<number>() }
+      agg.set(key, bucket)
+    }
+    bucket.total += 1
+    if (!a.correct) {
+      bucket.errors += 1
+      bucket.cyclesErr.add(a.cycle_number as number)
+    }
+  }
+
+  // 3) Filtrar los que tienen al menos 1 error, ordenar desc por errors
+  const buckets = [...agg.values()]
+    .filter(b => b.errors > 0)
+    .sort((a, b) => b.errors - a.errors || b.total - a.total)
+    .slice(0, limit)
+
+  if (buckets.length === 0) return []
+
+  // 4) Traer datos de los puzzles en un solo call
+  const puzzleIds = buckets.map(b => b.puzzle_id)
+  const { data: puzzles, error: errP } = await supabase
+    .from('puzzles')
+    .select('id, fen, solution, rating, themes')
+    .in('id', puzzleIds)
+  if (errP) { console.error('getTopErrorPuzzles/puzzles:', errP); return [] }
+
+  const themeLabel = (themes: string[] | null): string => {
+    if (!themes || themes.length === 0) return 'Táctica'
+    const known: Record<string, string> = {
+      mateIn1: 'Mate en 1', mateIn2: 'Mate en 2', mateIn3: 'Mate en 3',
+      fork: 'Horquilla', pin: 'Clavada', skewer: 'Ensarte',
+      backRankMate: 'Línea trasera', sacrifice: 'Sacrificio',
+      discoveredAttack: 'Ataque al descubierto', doubleCheck: 'Jaque doble',
+    }
+    for (const t of themes) if (known[t]) return known[t]
+    return themes[0]
+  }
+
+  const byId = new Map<string, { id: string; fen: string; solution: string[]; rating: number; themes: string[] | null }>()
+  for (const p of (puzzles ?? [])) byId.set(p.id as string, p as { id: string; fen: string; solution: string[]; rating: number; themes: string[] | null })
+
+  // 5) Ensamblar el resultado
+  return buckets
+    .map(b => {
+      const p = byId.get(b.puzzle_id)
+      if (!p) return null
+      return {
+        position:     b.position,
+        puzzle_id:    b.puzzle_id,
+        rating:       p.rating,
+        theme:        themeLabel(p.themes),
+        fen:          p.fen,
+        solution:     p.solution,
+        errors:       b.errors,
+        total_attempts: b.total,
+        cycles_with_error: Array.from(b.cyclesErr).sort((a, b) => a - b),
+      } as TopErrorPuzzle
+    })
+    .filter((x): x is TopErrorPuzzle => x !== null)
+}
+
 // Errores del ciclo actual — TODOS los non-retry incorrectos, no importa
 // en qué "sitting" pasaron. Cuando el user aprieta "Reintentar errores",
 // vuelve a jugar todos los que se equivocó en el ciclo. Los intentos de
